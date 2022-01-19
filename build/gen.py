@@ -205,7 +205,7 @@ def main(argv):
   else:
     host = platform
 
-  out_dir = options.out_path or os.path.join(REPO_ROOT, 'out')
+  out_dir = os.path.realpath(options.out_path or os.path.join(REPO_ROOT, 'out'))
   if not os.path.isdir(out_dir):
     os.makedirs(out_dir)
   if not options.no_last_commit_position:
@@ -251,6 +251,8 @@ def WriteGenericNinja(path, static_libraries, executables,
                       cxx, ar, ld, platform, host, options,
                       args_list, cflags=[], ldflags=[],
                       libflags=[], include_dirs=[], solibs=[]):
+  genpy_relpath = os.path.relpath(__file__, os.path.dirname(path))
+
   args = args_list.gen_command_line_args(options)
   if args:
     args = " " + args
@@ -261,7 +263,7 @@ def WriteGenericNinja(path, static_libraries, executables,
     'ld = ' + ld,
     '',
     'rule regen',
-    '  command = %s ../build/gen.py%s' % (sys.executable, args),
+    '  command = %s %s%s' % (sys.executable, genpy_relpath, args),
     '  description = Regenerating ninja files',
     '',
     'build build.ninja: regen',
