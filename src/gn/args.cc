@@ -269,7 +269,8 @@ Args::ValueWithOverrideMap Args::GetAllArguments() const {
   std::lock_guard<std::mutex> lock(lock_);
 
   // Sort the keys from declared_arguments_per_toolchain_ so
-  // the return value will be deterministic.
+  // the return value will be deterministic. Always prioritize
+  // the default toolchain.
   std::vector<const Settings*> keys;
   keys.reserve(declared_arguments_per_toolchain_.size());
   for (const auto& map_pair : declared_arguments_per_toolchain_) {
@@ -277,7 +278,8 @@ Args::ValueWithOverrideMap Args::GetAllArguments() const {
   }
   std::sort(keys.begin(), keys.end(),
             [](const Settings* a, const Settings* b) -> bool {
-              return a->toolchain_label() < b->toolchain_label();
+              return a->is_default() ||
+                     a->toolchain_label() < b->toolchain_label();
             });
 
   // Default values.
@@ -320,6 +322,8 @@ void Args::SetSystemVarsLocked(Scope* dest) const {
   os = "solaris";
 #elif defined(OS_NETBSD)
   os = "netbsd";
+#elif defined(OS_ZOS)
+  os = "zos";
 #else
 #error Unknown OS type.
 #endif
@@ -337,6 +341,8 @@ void Args::SetSystemVarsLocked(Scope* dest) const {
   static const char kPPC64[] = "ppc64";
   static const char kRISCV32[] = "riscv32";
   static const char kRISCV64[] = "riscv64";
+  static const char kE2K[] = "e2k";
+  static const char kLOONG64[] = "loong64";
   const char* arch = nullptr;
 
   // Set the host CPU architecture based on the underlying OS, not
@@ -365,6 +371,10 @@ void Args::SetSystemVarsLocked(Scope* dest) const {
     arch = kRISCV32;
   else if (os_arch == "riscv64")
     arch = kRISCV64;
+  else if (os_arch == "e2k")
+    arch = kE2K;
+  else if (os_arch == "loongarch64")
+    arch = kLOONG64;
   else
     CHECK(false) << "OS architecture not handled. (" << os_arch << ")";
 
@@ -393,7 +403,7 @@ void Args::SetSystemVarsLocked(Scope* dest) const {
   declared_arguments[variables::kTargetCpu] = empty_string;
 
   // Mark these variables used so the build config file can override them
-  // without geting a warning about overwriting an unused variable.
+  // without getting a warning about overwriting an unused variable.
   dest->MarkUsed(variables::kHostCpu);
   dest->MarkUsed(variables::kCurrentCpu);
   dest->MarkUsed(variables::kTargetCpu);

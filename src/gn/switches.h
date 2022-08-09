@@ -46,17 +46,9 @@ extern const char kMarkdown[];
 extern const char kMarkdown_HelpShort[];
 extern const char kMarkdown_Help[];
 
-extern const char kMetaDataKeys[];
-extern const char kMetaDataKeys_HelpShort[];
-extern const char kMetaDataKeys_Help[];
-
-extern const char kMetaWalkKeys[];
-extern const char kMetaWalkKeys_HelpShort[];
-extern const char kMetaWalkKeys_Help[];
-
-extern const char kMetaRebaseFiles[];
-extern const char kMetaRebaseFiles_HelpShort[];
-extern const char kMetaRebaseFiles_Help[];
+extern const char kNinjaExecutable[];
+extern const char kNinjaExecutable_HelpShort[];
+extern const char kNinjaExecutable_Help[];
 
 extern const char kNoColor[];
 extern const char kNoColor_HelpShort[];
@@ -114,6 +106,13 @@ extern const char kDefaultToolchain[];
   "\n"                                                                        \
   "      Non-wildcard inputs with no explicit toolchain specification will\n" \
   "      always match only a target in the default toolchain if one exists.\n"
+
+// This switch is used to signal to the gen command that it is being invoked on
+// a regeneration step. Ie, ninja has realized that build.ninja needs to be
+// generated again and has invoked gn gen. There is no help associated with it
+// because users should not be setting this switch. It is located in this file
+// so it can be shared between command_gen and ninja_build_writer.
+extern const char kRegeneration[];
 
 }  // namespace switches
 

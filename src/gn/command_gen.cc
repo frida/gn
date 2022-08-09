@@ -12,8 +12,10 @@
 #include "gn/commands.h"
 #include "gn/compile_commands_writer.h"
 #include "gn/eclipse_writer.h"
+#include "gn/filesystem_utils.h"
 #include "gn/json_project_writer.h"
 #include "gn/ninja_target_writer.h"
+#include "gn/ninja_tools.h"
 #include "gn/ninja_writer.h"
 #include "gn/qt_creator_writer.h"
 #include "gn/runtime_deps.h"
@@ -31,6 +33,7 @@ namespace commands {
 namespace {
 
 const char kSwitchCheck[] = "check";
+const char kSwitchCleanStale[] = "clean-stale";
 const char kSwitchFilters[] = "filters";
 const char kSwitchIde[] = "ide";
 const char kSwitchIdeValueEclipse[] = "eclipse";
@@ -40,6 +43,7 @@ const char kSwitchIdeValueVs2013[] = "vs2013";
 const char kSwitchIdeValueVs2015[] = "vs2015";
 const char kSwitchIdeValueVs2017[] = "vs2017";
 const char kSwitchIdeValueVs2019[] = "vs2019";
+const char kSwitchIdeValueVs2022[] = "vs2022";
 const char kSwitchIdeValueWinSdk[] = "winsdk";
 const char kSwitchIdeValueXcode[] = "xcode";
 const char kSwitchIdeValueJson[] = "json";
@@ -52,6 +56,11 @@ const char kSwitchXcodeProject[] = "xcode-project";
 const char kSwitchXcodeBuildSystem[] = "xcode-build-system";
 const char kSwitchXcodeBuildsystemValueLegacy[] = "legacy";
 const char kSwitchXcodeBuildsystemValueNew[] = "new";
+const char kSwitchXcodeConfigurations[] = "xcode-configs";
+const char kSwitchXcodeConfigurationBuildPath[] = "xcode-config-build-dir";
+const char kSwitchXcodeAdditionalFilesPatterns[] =
+    "xcode-additional-files-patterns";
+const char kSwitchXcodeAdditionalFilesRoots[] = "xcode-additional-files-roots";
 const char kSwitchJsonFileName[] = "json-file-name";
 const char kSwitchJsonIdeScript[] = "json-ide-script";
 const char kSwitchJsonIdeScriptArgs[] = "json-ide-script-args";
@@ -207,7 +216,7 @@ bool RunIdeWriter(const std::string& ide,
     return res;
   } else if (ide == kSwitchIdeValueVs || ide == kSwitchIdeValueVs2013 ||
              ide == kSwitchIdeValueVs2015 || ide == kSwitchIdeValueVs2017 ||
-             ide == kSwitchIdeValueVs2019) {
+             ide == kSwitchIdeValueVs2019 || ide == kSwitchIdeValueVs2022) {
     VisualStudioWriter::Version version = VisualStudioWriter::Version::Vs2019;
     if (ide == kSwitchIdeValueVs2013)
       version = VisualStudioWriter::Version::Vs2013;
@@ -215,6 +224,8 @@ bool RunIdeWriter(const std::string& ide,
       version = VisualStudioWriter::Version::Vs2015;
     else if (ide == kSwitchIdeValueVs2017)
       version = VisualStudioWriter::Version::Vs2017;
+    else if (ide == kSwitchIdeValueVs2022)
+      version = VisualStudioWriter::Version::Vs2022;
 
     std::string sln_name;
     if (command_line->HasSwitch(kSwitchSln))
@@ -226,13 +237,19 @@ bool RunIdeWriter(const std::string& ide,
     if (command_line->HasSwitch(kSwitchIdeValueWinSdk))
       win_kit = command_line->GetSwitchValueASCII(kSwitchIdeValueWinSdk);
     std::string ninja_extra_args;
-    if (command_line->HasSwitch(kSwitchNinjaExtraArgs))
+    if (command_line->HasSwitch(kSwitchNinjaExtraArgs)) {
       ninja_extra_args =
           command_line->GetSwitchValueASCII(kSwitchNinjaExtraArgs);
+    }
+    std::string ninja_executable;
+    if (command_line->HasSwitch(kSwitchNinjaExecutable)) {
+      ninja_executable =
+          command_line->GetSwitchValueASCII(kSwitchNinjaExecutable);
+    }
     bool no_deps = command_line->HasSwitch(kSwitchNoDeps);
     bool res = VisualStudioWriter::RunAndWriteFiles(
         build_settings, builder, version, sln_name, filters, win_kit,
-        ninja_extra_args, no_deps, err);
+        ninja_extra_args, ninja_executable, no_deps, err);
     if (res && !quiet) {
       OutputString("Generating Visual Studio projects took " +
                    base::Int64ToString(timer.Elapsed().InMilliseconds()) +
@@ -245,6 +262,10 @@ bool RunIdeWriter(const std::string& ide,
         command_line->GetSwitchValueASCII(kSwitchIdeRootTarget),
         command_line->GetSwitchValueASCII(kSwitchNinjaExecutable),
         command_line->GetSwitchValueASCII(kSwitchFilters),
+        command_line->GetSwitchValueASCII(kSwitchXcodeConfigurations),
+        command_line->GetSwitchValuePath(kSwitchXcodeConfigurationBuildPath),
+        command_line->GetSwitchValueNative(kSwitchXcodeAdditionalFilesPatterns),
+        command_line->GetSwitchValueNative(kSwitchXcodeAdditionalFilesRoots),
         XcodeBuildSystem::kLegacy,
     };
 
@@ -352,6 +373,63 @@ bool RunCompileCommandsWriter(const BuildSettings* build_settings,
   return res;
 }
 
+bool RunNinjaPostProcessTools(const BuildSettings* build_settings,
+                              base::FilePath ninja_executable,
+                              bool is_regeneration,
+                              bool clean_stale,
+                              Err* err) {
+  // If the user did not specify an executable, skip running the post processing
+  // tools. Since these tools can re-write ninja build log and dep logs, it is
+  // really important that ninja executable used for tools matches the
+  // executable that is used for builds.
+  if (ninja_executable.empty()) {
+    if (clean_stale) {
+      *err = Err(Location(), "No --ninja-executable provided.",
+                 "--clean-stale requires a ninja executable to run. You can "
+                 "provide one on the command line via --ninja-executable.");
+      return false;
+    }
+
+    return true;
+  }
+
+  base::FilePath build_dir =
+      build_settings->GetFullPath(build_settings->build_dir());
+
+  if (clean_stale) {
+    if (build_settings->ninja_required_version() < Version{1, 10, 0}) {
+      *err = Err(Location(), "Need a ninja executable at least version 1.10.0.",
+                 "--clean-stale requires a ninja executable of version 1.10.0 "
+                 "or later.");
+      return false;
+    }
+
+    if (!InvokeNinjaCleanDeadTool(ninja_executable, build_dir, err)) {
+      return false;
+    }
+
+    if (!InvokeNinjaRecompactTool(ninja_executable, build_dir, err)) {
+      return false;
+    }
+  }
+
+  // If we have a ninja version that supports restat, we should restat the
+  // build.ninja file so the next ninja invocation will use the right mtime. If
+  // gen is being invoked as part of a re-gen (ie, ninja is invoking gn gen),
+  // then we can elide this restat, as ninja will restat build.ninja anyways
+  // after it is complete.
+  if (!is_regeneration &&
+      build_settings->ninja_required_version() >= Version{1, 10, 0}) {
+    std::vector<base::FilePath> files_to_restat{
+        base::FilePath(FILE_PATH_LITERAL("build.ninja"))};
+    if (!InvokeNinjaRestatTool(ninja_executable, build_dir, files_to_restat,
+                               err)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 }  // namespace
 
 const char kGen[] = "gen";
@@ -373,6 +451,21 @@ const char kGen_Help[] =
 
   See "gn help switches" for the common command-line switches.
 
+General options
+
+  --ninja-executable=<string>
+      Can be used to specify the ninja executable to use. This executable will
+      be used as an IDE option to indicate which ninja to use for building. This
+      executable will also be used as part of the gen process for triggering a
+      restat on generated ninja files and for use with --clean-stale.
+
+  --clean-stale
+      This option will cause no longer needed output files to be removed from
+      the build directory, and their records pruned from the ninja build log and
+      dependency database after the ninja build graph has been generated. This
+      option requires a ninja executable of at least version 1.10.0. It can be
+      provided by the --ninja-executable switch. Also see "gn help clean_stale".
+
 IDE options
 
   GN optionally generates files for IDE. Files won't be overwritten if their
@@ -387,6 +480,7 @@ IDE options
       "vs2015" - Visual Studio 2015 project/solution files.
       "vs2017" - Visual Studio 2017 project/solution files.
       "vs2019" - Visual Studio 2019 project/solution files.
+      "vs2022" - Visual Studio 2022 project/solution files.
       "xcode" - Xcode workspace/solution files.
       "qtcreator" - QtCreator project files.
       "json" - JSON file containing target information
@@ -412,6 +506,9 @@ Visual Studio Flags
       As an example, "10.0.15063.0" can be specified to use Creators Update SDK
       instead of the default one.
 
+  --ninja-executable=<string>
+      Can be used to specify the ninja executable to use when building.
+
   --ninja-extra-args=<string>
       This string is passed without any quoting to the ninja invocation
       command-line. Can be used to configure ninja flags, like "-j".
@@ -419,7 +516,7 @@ Visual Studio Flags
 Xcode Flags
 
   --xcode-project=<file_name>
-      Override defaut Xcode project file name ("all"). The project file is
+      Override default Xcode project file name ("all"). The project file is
       written to the root build directory.
 
   --xcode-build-system=<value>
@@ -427,6 +524,34 @@ Xcode Flags
       values are (default to "legacy"):
       "legacy" - Legacy Build system
       "new" - New Build System
+
+  --xcode-configs=<config_name_list>
+      Configure the list of build configuration supported by the generated
+      project. If specified, must be a list of semicolon-separated strings.
+      If ommitted, a single configuration will be used in the generated
+      project derived from the build directory.
+
+  --xcode-config-build-dir=<string>
+      If present, must be a path relative to the source directory. It will
+      default to $root_out_dir if ommitted. The path is assumed to point to
+      the directory where ninja needs to be invoked. This variable can be
+      used to build for multiple configuration / platform / environment from
+      the same generated Xcode project (assuming that the user has created a
+      gn build directory with the correct args.gn for each).
+
+      One useful value is to use Xcode variables such as '${CONFIGURATION}'
+      or '${EFFECTIVE_PLATFORM}'.
+
+  --xcode-additional-files-patterns=<pattern_list>
+      If present, must be a list of semicolon-separated file patterns. It
+      will be used to add all files matching the pattern located in the
+      source tree to the project. It can be used to add, e.g. documentation
+      files to the project to allow easily edit them.
+
+  --xcode-additional-files-roots=<path_list>
+      If present, must be a list of semicolon-separated paths. It will be used
+      as roots when looking for additional files to add. If ommitted, defaults
+      to "//".
 
   --ninja-executable=<string>
       Can be used to specify the ninja executable to use when building.
@@ -488,11 +613,17 @@ Compilation Database
       Produces a compile_commands.json file in the root of the build directory
       containing an array of “command objects”, where each command object
       specifies one way a translation unit is compiled in the project. If a list
-      of target_name is supplied, only targets that are reachable from the list
-      of target_name will be used for “command objects” generation, otherwise
-      all available targets will be used. This is used for various Clang-based
-      tooling, allowing for the replay of individual compilations independent
-      of the build system.
+      of target_name is supplied, only targets that are reachable from any
+      target in any build file whose name is target_name will be used for
+      “command objects” generation, otherwise all available targets will be used.
+      This is used for various Clang-based tooling, allowing for the replay of
+      individual compilations independent of the build system.
+      e.g. "foo" will match:
+      - "//path/to/src:foo"
+      - "//other/path:foo"
+      - "//foo:foo"
+      and not match:
+      - "//foo:bar"
 )";
 
 int RunGen(const std::vector<std::string>& args) {
@@ -523,6 +654,16 @@ int RunGen(const std::vector<std::string>& args) {
       setup->set_check_system_includes(true);
   }
 
+  // If this is a regeneration, replace existing build.ninja and build.ninja.d
+  // with just enough for ninja to call GN and regenerate ninja files. This
+  // removes any potential soon-to-be-dangling references and ensures that
+  // regeneration can be restarted if interrupted.
+  if (command_line->HasSwitch(switches::kRegeneration)) {
+    if (!commands::PrepareForRegeneration(&setup->build_settings())) {
+      return false;
+    }
+  }
+
   // Cause the load to also generate the ninja files for each target.
   TargetWriteInfo write_info;
   setup->builder().set_resolved_and_generated_callback(
@@ -548,6 +689,15 @@ int RunGen(const std::vector<std::string>& args) {
   // Write the root ninja files.
   if (!NinjaWriter::RunAndWriteFiles(&setup->build_settings(), setup->builder(),
                                      write_info.rules, &err)) {
+    err.PrintToStdout();
+    return 1;
+  }
+
+  if (!RunNinjaPostProcessTools(
+          &setup->build_settings(),
+          command_line->GetSwitchValuePath(switches::kNinjaExecutable),
+          command_line->HasSwitch(switches::kRegeneration),
+          command_line->HasSwitch(kSwitchCleanStale), &err)) {
     err.PrintToStdout();
     return 1;
   }

@@ -302,7 +302,7 @@ const char kConfig_Help[] =
   need to remove the corresponding config that sets it. The final set of flags,
   defines, etc. for a target is generated in this order:
 
-   1. The values specified directly on the target (rather than using a config.
+   1. The values specified directly on the target (rather than using a config).
    2. The configs specified in the target's "configs" list, in order.
    3. Public_configs from a breadth-first traversal of the dependency tree in
       the order that the targets appear in "deps".
@@ -332,6 +332,7 @@ Variables valid in a config definition
     CONFIG_VALUES_VARS_HELP
 
     R"(  Nested configs: configs
+  General: visibility
 
 Variables on a target used to apply configs
 
@@ -806,40 +807,6 @@ Value RunNotNeeded(Scope* scope,
   return Value();
 }
 
-// set_sources_assignment_filter -----------------------------------------------
-
-const char kSetSourcesAssignmentFilter[] = "set_sources_assignment_filter";
-const char kSetSourcesAssignmentFilter_HelpShort[] =
-    "set_sources_assignment_filter: Deprecated feature.";
-const char kSetSourcesAssignmentFilter_Help[] =
-    R"(set_sources_assignment_filter: Deprecated feature.
-
-  This feature is deprecated. It will be removed once all usages have been
-  removed. Only supports a single argument that needs to be an empty list.
-)";
-
-Value RunSetSourcesAssignmentFilter(Scope* scope,
-                                    const FunctionCallNode* function,
-                                    const std::vector<Value>& args,
-                                    Err* err) {
-  if (args.size() != 1) {
-    *err = Err(function, "set_sources_assignment_filter takes one argument.");
-    return Value();
-  }
-
-  if (!args[0].VerifyTypeIs(Value::LIST, err)) {
-    return Value();
-  }
-
-  if (!args[0].list_value().empty()) {
-    *err = Err(function,
-               "set_sources_assignment_filter argument must be an empty list.");
-    return Value();
-  }
-
-  return Value();
-}
-
 // pool ------------------------------------------------------------------------
 
 const char kPool[] = "pool";
@@ -988,6 +955,68 @@ Value RunPrint(Scope* scope,
     output.append(args[i].ToString(false));
   }
   output.push_back('\n');
+
+  const BuildSettings::PrintCallback& cb =
+      scope->settings()->build_settings()->print_callback();
+  if (cb) {
+    cb(output);
+  } else {
+    printf("%s", output.c_str());
+    fflush(stdout);
+  }
+
+  return Value();
+}
+
+// print_stack_trace -----------------------------------------------------------
+
+const char kPrintStackTrace[] = "print_stack_trace";
+const char kPrintStackTrace_HelpShort[] =
+    "print_stack_trace: Prints a stack trace.";
+const char kPrintStackTrace_Help[] =
+    R"(print_stack_trace: Prints a stack trace.
+
+  Prints the current file location, and all template invocations that led up to
+  this location, to the console.
+
+Examples
+
+  template("foo"){
+    print_stack_trace()
+  }
+  template("bar"){
+    foo(target_name + ".foo") {
+      baz = invoker.baz
+    }
+  }
+  bar("lala") {
+    baz = 42
+  }
+
+  will print out the following:
+
+  print_stack_trace() initiated at  //build.gn:2
+    bar("lala")  //BUILD.gn:9
+    foo("lala.foo")  //BUILD.gn:5
+    print_stack_trace()  //BUILD.gn:2
+
+)";
+
+Value RunPrintStackTrace(Scope* scope,
+                         const FunctionCallNode* function,
+                         const std::vector<Value>& args,
+                         Err* err) {
+  std::string location_str = function->GetRange().begin().Describe(false);
+  std::string toolchain =
+      scope->settings()->toolchain_label().GetUserVisibleName(false);
+  std::string output =
+      "print_stack_trace() initiated at:  " + location_str + "  using: " + toolchain;
+  output.push_back('\n');
+
+  for (const auto& entry : scope->GetTemplateInvocationEntries()) {
+    output.append("  " + entry.Describe() + "\n");
+  }
+  output.append("  print_stack_trace()  " + location_str + "\n");
 
   const BuildSettings::PrintCallback& cb =
       scope->settings()->build_settings()->print_callback();
@@ -1426,12 +1455,12 @@ struct FunctionInfoInitializer {
     INSERT_FUNCTION(NotNeeded, false)
     INSERT_FUNCTION(Pool, false)
     INSERT_FUNCTION(Print, false)
+    INSERT_FUNCTION(PrintStackTrace, false)
     INSERT_FUNCTION(ProcessFileTemplate, false)
     INSERT_FUNCTION(ReadFile, false)
     INSERT_FUNCTION(RebasePath, false)
     INSERT_FUNCTION(SetDefaults, false)
     INSERT_FUNCTION(SetDefaultToolchain, false)
-    INSERT_FUNCTION(SetSourcesAssignmentFilter, false)
     INSERT_FUNCTION(SplitList, false)
     INSERT_FUNCTION(StringJoin, false)
     INSERT_FUNCTION(StringReplace, false)

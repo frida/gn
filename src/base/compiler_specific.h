@@ -18,23 +18,12 @@
 
 #endif  // COMPILER_MSVC
 
-#if COMPILER_GCC && defined(NDEBUG)
+#if defined(COMPILER_GCC) && defined(NDEBUG)
 #define ALWAYS_INLINE inline __attribute__((__always_inline__))
-#elif COMPILER_MSVC && defined(NDEBUG)
+#elif defined(COMPILER_MSVC) && defined(NDEBUG)
 #define ALWAYS_INLINE __forceinline
 #else
 #define ALWAYS_INLINE inline
-#endif
-
-// Annotate a function indicating the caller must examine the return value.
-// Use like:
-//   int foo() WARN_UNUSED_RESULT;
-// To explicitly ignore a result, see |ignore_result()| in base/macros.h.
-#undef WARN_UNUSED_RESULT
-#if defined(COMPILER_GCC) || defined(__clang__)
-#define WARN_UNUSED_RESULT __attribute__((warn_unused_result))
-#else
-#define WARN_UNUSED_RESULT
 #endif
 
 // Tell the compiler a function is using a printf-style format string.
@@ -67,7 +56,9 @@
 #endif  // !defined(LIKELY)
 
 // Macro for telling -Wimplicit-fallthrough that a fallthrough is intentional.
-#if defined(__clang__)
+#if __cplusplus >= 201703L
+#define FALLTHROUGH [[fallthrough]]
+#elif defined(__clang__)
 #define FALLTHROUGH [[clang::fallthrough]]
 #else
 #define FALLTHROUGH

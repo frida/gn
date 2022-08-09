@@ -12,10 +12,9 @@ namespace variables {
 // Built-in variables ----------------------------------------------------------
 
 const char kGnVersion[] = "gn_version";
-const char kGnVersion_HelpShort[] =
-    "gn_version: [number] The version of gn.";
+const char kGnVersion_HelpShort[] = "gn_version: [number] The version of gn.";
 const char kGnVersion_Help[] =
-  R"(gn_version: [number] The version of gn.
+    R"(gn_version: [number] The version of gn.
 
   Corresponds to the number printed by `gn --version`.
 
@@ -33,7 +32,7 @@ const char kHostCpu_Help[] =
   This is value is exposed so that cross-compile toolchains can access the host
   architecture when needed.
 
-  The value should generally be considered read-only, but it can be overriden
+  The value should generally be considered read-only, but it can be overridden
   in order to handle unusual cases where there might be multiple plausible
   values for the host architecture (e.g., if you can do either 32-bit or 64-bit
   builds). The value is not used internally by GN for any purpose.
@@ -125,6 +124,13 @@ Possible values
   - "arm"
   - "arm64"
   - "mipsel"
+  - "mips64el"
+  - "s390x"
+  - "ppc64"
+  - "riscv32"
+  - "riscv64"
+  - "e2k"
+  - "loong64"
 )";
 
 const char kTargetName[] = "target_name";
@@ -367,7 +373,7 @@ Example
 
   action("myscript") {
     # Pass the generated output dir to the script.
-    args = [ "-o", rebase_path(target_gen_dir, root_build_dir) ]"
+    args = [ "-o", rebase_path(target_gen_dir, root_build_dir) ]
   }
 )";
 
@@ -392,7 +398,7 @@ Example
 
   action("myscript") {
     # Pass the output dir to the script.
-    args = [ "-o", rebase_path(target_out_dir, root_build_dir) ]"
+    args = [ "-o", rebase_path(target_out_dir, root_build_dir) ]
   }
 )";
 
@@ -411,7 +417,7 @@ Example
   "     those configs appear in the list.\n"                                 \
   "  5. all_dependent_configs pulled from dependencies, in the order of\n"   \
   "     the \"deps\" list. This is done recursively. If a config appears\n"  \
-  "     more than once, only the first occurence will be used.\n"            \
+  "     more than once, only the first occurrence will be used.\n"           \
   "  6. public_configs pulled from dependencies, in the order of the\n"      \
   "     \"deps\" list. If a dependency is public, they will be applied\n"    \
   "     recursively.\n"
@@ -509,6 +515,23 @@ Example
   }
 )";
 
+const char kGenDeps[] = "gen_deps";
+const char kGenDeps_HelpShort[] =
+    "gen_deps: [label list] "
+    "Declares targets that should generate when this one does.";
+const char kGenDeps_Help[] =
+    R"(gen_deps: Declares targets that should generate when this one does.
+
+  A list of target labels.
+
+  Not all GN targets that get evaluated are actually turned into ninja targets
+  (see "gn help execution"). If this target is generated, then any targets in
+  the "gen_deps" list will also be generated, regardless of the usual critera.
+
+  Since "gen_deps" are not build time dependencies, there can be cycles between
+  "deps" and "gen_deps" or within "gen_deps" itself.
+)";
+
 const char kArflags[] = "arflags";
 const char kArflags_HelpShort[] =
     "arflags: [string list] Arguments passed to static_library archiver.";
@@ -537,6 +560,14 @@ const char kArgs_Help[] =
   For action and action_foreach targets, args is the list of arguments to pass
   to the script. Typically you would use source expansion (see "gn help
   source_expansion") to insert the source file names.
+
+  Args can also expand the substitution patterns corresponding to config
+  variables in the same way that compiler tools (see "gn help tool") do. These
+  allow actions that run compiler or compiler-like tools to access the results
+  of propagating configs through the build graph. For example:
+
+  args = [ "{{defines}}", "{{include_dirs}}", "{{rustenv}}", "--input-file",
+           "{{source}}" ]
 
   See also "gn help action" and "gn help action_foreach".
 )";
@@ -1064,7 +1095,7 @@ const char kDepfile_Help[] =
   The .d file should go in the target output directory. If you have more than
   one source file that the script is being run over, you can use the output
   file expansions described in "gn help action_foreach" to name the .d file
-  according to the input."
+  according to the input.
 
   The format is that of a Makefile and all paths must be relative to the root
   build directory. Only one output may be listed and it must match the first
@@ -1431,7 +1462,7 @@ const char kMetadata_Help[] =
   Generally, these keys will include three types of lists: lists of ordinary
   strings, lists of filenames intended to be rebased according to their
   particular source directory, and lists of target labels intended to be used
-  as barriers to the walk. Verfication of these categories occurs at walk time,
+  as barriers to the walk. Verification of these categories occurs at walk time,
   not creation time (since it is not clear until the walk which values are
   intended for which purpose).
 
@@ -1800,7 +1831,7 @@ const char kPublicConfigs_Help[] =
 Propagation of public configs
 
   Public configs are applied to all targets that depend directly on this one.
-  These dependant targets can further push this target's public configs
+  These dependent targets can further push this target's public configs
   higher in the dependency tree by depending on it via public_deps (see "gn
   help public_deps").
 
@@ -2186,7 +2217,7 @@ const char kWriteOutputConversion_Help[] =
     R"(output_conversion: Data format for generated_file targets.
 
   Controls how the "contents" of a generated_file target is formatted.
-  See "gn help io_conversion".
+  See `gn help io_conversion`.
 )";
 
 const char kWriteRuntimeDeps[] = "write_runtime_deps";
@@ -2265,6 +2296,7 @@ const VariableInfoMap& GetTargetVariables() {
   if (info_map.empty()) {
     INSERT_VARIABLE(AllDependentConfigs)
     INSERT_VARIABLE(AllowCircularIncludesFrom)
+    INSERT_VARIABLE(GenDeps)
     INSERT_VARIABLE(Arflags)
     INSERT_VARIABLE(Args)
     INSERT_VARIABLE(Asmflags)

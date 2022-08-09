@@ -29,14 +29,20 @@ NinjaActionTargetWriter::~NinjaActionTargetWriter() = default;
 void NinjaActionTargetWriter::Run() {
   std::string custom_rule_name = WriteRuleDefinition();
 
-  // Collect our deps to pass as "extra hard dependencies" for input deps. This
-  // will force all of the action's dependencies to be completed before the
-  // action is run. Usually, if an action has a dependency, it will be
+  // Collect our deps to pass as additional "hard dependencies" for input deps.
+  // This will force all of the action's dependencies to be completed before
+  // the action is run. Usually, if an action has a dependency, it will be
   // operating on the result of that previous step, so we need to be sure to
   // serialize these.
-  std::vector<const Target*> extra_hard_deps;
-  for (const auto& pair : target_->GetDeps(Target::DEPS_LINKED))
-    extra_hard_deps.push_back(pair.ptr);
+  std::vector<const Target*> additional_hard_deps;
+  std::vector<OutputFile> data_outs;
+  for (const auto& pair : target_->GetDeps(Target::DEPS_LINKED)) {
+    if (pair.ptr->IsDataOnly()) {
+      data_outs.push_back(pair.ptr->dependency_output_file());
+    } else {
+      additional_hard_deps.push_back(pair.ptr);
+    }
+  }
 
   // For ACTIONs, the input deps appear only once in the generated ninja
   // file, so WriteInputDepsStampAndGetDep() won't create a stamp file
@@ -44,7 +50,7 @@ void NinjaActionTargetWriter::Run() {
   size_t num_stamp_uses =
       target_->output_type() == Target::ACTION ? 1u : target_->sources().size();
   std::vector<OutputFile> input_deps =
-      WriteInputDepsStampAndGetDep(extra_hard_deps, num_stamp_uses);
+      WriteInputDepsStampAndGetDep(additional_hard_deps, num_stamp_uses);
   out_ << std::endl;
 
   // Collects all output files for writing below.
@@ -74,6 +80,9 @@ void NinjaActionTargetWriter::Run() {
     if (target_->action_values().has_depfile()) {
       WriteDepfile(SourceFile());
     }
+
+    WriteNinjaVariablesForAction();
+
     if (target_->action_values().pool().ptr) {
       out_ << "  pool = ";
       out_ << target_->action_values().pool().ptr->GetNinjaName(
@@ -88,7 +97,6 @@ void NinjaActionTargetWriter::Run() {
   // done before we run the action.
   // TODO(thakis): If the action has just a single output, make things depend
   // on that output directly without writing a stamp file.
-  std::vector<OutputFile> data_outs;
   for (const auto& dep : target_->data_deps())
     data_outs.push_back(dep.ptr->dependency_output_file());
   WriteStampForTarget(output_files, data_outs);
@@ -144,7 +152,8 @@ std::string NinjaActionTargetWriter::WriteRuleDefinition() {
   out_ << std::endl;
   out_ << "  description = ACTION " << target_label << std::endl;
   out_ << "  restat = 1" << std::endl;
-  const Tool* tool = target_->toolchain()->GetTool(GeneralTool::kGeneralToolAction);
+  const Tool* tool =
+      target_->toolchain()->GetTool(GeneralTool::kGeneralToolAction);
   if (tool && tool->pool().ptr) {
     out_ << "  pool = ";
     out_ << tool->pool().ptr->GetNinjaName(
@@ -199,6 +208,7 @@ void NinjaActionTargetWriter::WriteSourceRules(
         target_, settings_, sources[i],
         target_->action_values().rsp_file_contents().required_types(),
         args_escape_options, out_);
+    WriteNinjaVariablesForAction();
 
     if (target_->action_values().has_depfile()) {
       WriteDepfile(sources[i]);
@@ -242,4 +252,11 @@ void NinjaActionTargetWriter::WriteDepfile(const SourceFile& source) {
       Version{1, 9, 0}) {
     out_ << "  deps = gcc" << std::endl;
   }
+}
+
+void NinjaActionTargetWriter::WriteNinjaVariablesForAction() {
+  SubstitutionBits subst;
+  target_->action_values().args().FillRequiredTypes(&subst);
+  WriteRustCompilerVars(subst, /*indent=*/true, /*always_write=*/false);
+  WriteCCompilerVars(subst, /*indent=*/true, /*respect_source_types=*/false);
 }

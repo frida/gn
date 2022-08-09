@@ -43,11 +43,9 @@
 
 namespace {
 
-void AddTargetDependencies(const Target* target,
-                           std::set<const Target*>* deps) {
+void AddTargetDependencies(const Target* target, TargetSet* deps) {
   for (const auto& pair : target->GetDeps(Target::DEPS_LINKED)) {
-    if (deps->find(pair.ptr) == deps->end()) {
-      deps->insert(pair.ptr);
+    if (deps->add(pair.ptr)) {
       AddTargetDependencies(pair.ptr, deps);
     }
   }
@@ -71,7 +69,7 @@ bool FilterTargets(const BuildSettings* build_settings,
     }
     commands::FilterTargetsByPatterns(all_targets, filters, targets);
 
-    std::set<const Target*> target_set(targets->begin(), targets->end());
+    TargetSet target_set(targets->begin(), targets->end());
     for (const auto* target : *targets)
       AddTargetDependencies(target, &target_set);
 
@@ -315,7 +313,6 @@ class SimpleJSONWriter {
 
         if (line_end == std::string_view::npos) {
           out_ << json;
-          ;
           comma_ = {};
           return;
         }
@@ -426,6 +423,7 @@ StringOutputBuffer JSONProjectWriter::GenerateJSON(
   }
   json_writer.EndDict();  // build_settings
 
+  std::map<Label, const Toolchain*> toolchains;
   json_writer.BeginDict("targets");
   {
     for (const auto* target : sorted_targets) {
@@ -445,9 +443,63 @@ StringOutputBuffer JSONProjectWriter::GenerateJSON(
                                          base::JSONWriter::OPTIONS_PRETTY_PRINT,
                                          &json_dict);
       json_writer.AddJSONDict(target_labels[target], json_dict);
+      toolchains[target->toolchain()->label()] = target->toolchain();
     }
   }
   json_writer.EndDict();  // targets
+
+  json_writer.BeginDict("toolchains");
+  {
+    for (const auto& tool_chain_kv : toolchains) {
+      base::Value toolchain{base::Value::Type::DICTIONARY};
+      const auto& tools = tool_chain_kv.second->tools();
+      for (const auto& tool_kv : tools) {
+        // Do not list builtin tools
+        if (tool_kv.second->AsBuiltin())
+          continue;
+        base::Value tool_info{base::Value::Type::DICTIONARY};
+        auto setIfNotEmptry = [&](const auto& key, const auto& value) {
+          if (value.size())
+            tool_info.SetKey(key, base::Value{value});
+        };
+        auto setSubstitutionList = [&](const auto& key,
+                                       const SubstitutionList& list) {
+          if (list.list().empty())
+            return;
+          base::Value values{base::Value::Type::LIST};
+          for (const auto& v : list.list())
+            values.GetList().emplace_back(base::Value{v.AsString()});
+          tool_info.SetKey(key, std::move(values));
+        };
+        const auto& tool = tool_kv.second;
+        setIfNotEmptry("command", tool->command().AsString());
+        setIfNotEmptry("command_launcher", tool->command_launcher());
+        setIfNotEmptry("default_output_extension",
+                       tool->default_output_extension());
+        setIfNotEmptry("default_output_dir",
+                       tool->default_output_dir().AsString());
+        setIfNotEmptry("depfile", tool->depfile().AsString());
+        setIfNotEmptry("description", tool->description().AsString());
+        setIfNotEmptry("framework_switch", tool->framework_switch());
+        setIfNotEmptry("weak_framework_switch", tool->weak_framework_switch());
+        setIfNotEmptry("framework_dir_switch", tool->framework_dir_switch());
+        setIfNotEmptry("lib_switch", tool->lib_switch());
+        setIfNotEmptry("lib_dir_switch", tool->lib_dir_switch());
+        setIfNotEmptry("linker_arg", tool->linker_arg());
+        setSubstitutionList("outputs", tool->outputs());
+        setSubstitutionList("partial_outputs", tool->partial_outputs());
+        setSubstitutionList("runtime_outputs", tool->runtime_outputs());
+        setIfNotEmptry("output_prefix", tool->output_prefix());
+
+        toolchain.SetKey(tool_kv.first, std::move(tool_info));
+      }
+      std::string json_dict;
+      base::JSONWriter::WriteWithOptions(
+          toolchain, base::JSONWriter::OPTIONS_PRETTY_PRINT, &json_dict);
+      json_writer.AddJSONDict(tool_chain_kv.first.GetUserVisibleName(false), json_dict);
+    }
+  }
+  json_writer.EndDict();  // toolchains
 
   json_writer.Close();
 

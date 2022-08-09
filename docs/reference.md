@@ -9,6 +9,7 @@
     *   [args: Display or configure arguments declared by the build.](#cmd_args)
     *   [check: Check header dependencies.](#cmd_check)
     *   [clean: Cleans the output directory.](#cmd_clean)
+    *   [clean_stale: Cleans the stale output files from the output directory.](#cmd_clean_stale)
     *   [desc: Show lots of insightful information about a target or config.](#cmd_desc)
     *   [format: Format .gn files.](#cmd_format)
     *   [gen: Generate ninja files.](#cmd_gen)
@@ -33,7 +34,7 @@
     *   [shared_library: Declare a shared library target.](#func_shared_library)
     *   [source_set: Declare a source set target.](#func_source_set)
     *   [static_library: Declare a static library target.](#func_static_library)
-    *   [target: Declare an target with the given programmatic type.](#func_target)
+    *   [target: Declare a target with the given programmatic type.](#func_target)
 *   [Buildfile functions](#functions)
     *   [assert: Assert an expression is true at generation time.](#func_assert)
     *   [config: Defines a configuration object.](#func_config)
@@ -52,12 +53,12 @@
     *   [not_needed: Mark variables from scope as not needed.](#func_not_needed)
     *   [pool: Defines a pool object.](#func_pool)
     *   [print: Prints to the console.](#func_print)
+    *   [print_stack_trace: Prints a stack trace.](#func_print_stack_trace)
     *   [process_file_template: Do template expansion over a list of files.](#func_process_file_template)
     *   [read_file: Read a file into a variable.](#func_read_file)
     *   [rebase_path: Rebase a file or directory to another location.](#func_rebase_path)
     *   [set_default_toolchain: Sets the default toolchain name.](#func_set_default_toolchain)
     *   [set_defaults: Set default values for a target type.](#func_set_defaults)
-    *   [set_sources_assignment_filter: Deprecated feature.](#func_set_sources_assignment_filter)
     *   [split_list: Splits a list into N different sub-lists.](#func_split_list)
     *   [string_join: Concatenates a list of strings with a separator.](#func_string_join)
     *   [string_replace: Replaces substring in the given string.](#func_string_replace)
@@ -124,6 +125,7 @@
     *   [framework_dirs: [directory list] Additional framework search directories.](#var_framework_dirs)
     *   [frameworks: [name list] Name of frameworks that must be linked.](#var_frameworks)
     *   [friend: [label pattern list] Allow targets to include private headers.](#var_friend)
+    *   [gen_deps: [label list] Declares targets that should generate when this one does.](#var_gen_deps)
     *   [include_dirs: [directory list] Additional include directories.](#var_include_dirs)
     *   [inputs: [file list] Additional compile-time dependencies.](#var_inputs)
     *   [ldflags: [string list] Flags passed to the linker.](#var_ldflags)
@@ -195,10 +197,10 @@
    - "test_targets": A list of the labels for targets that are needed to run
      the tests we wish to run.
 
-   - "additional_compile_targets": A list of the labels for targets that we
-     wish to rebuild, but aren't necessarily needed for testing. The important
-     difference between this field and "test_targets" is that if an item in
-     the additional_compile_targets list refers to a group, then any
+   - "additional_compile_targets" (optional): A list of the labels for targets
+     that we wish to rebuild, but aren't necessarily needed for testing. The
+     important difference between this field and "test_targets" is that if an
+     item in the additional_compile_targets list refers to a group, then any
      dependencies of that group will be returned if they are out of date, but
      the group itself does not need to be. If the dependencies themselves are
      groups, the same filtering is repeated. This filtering can be used to
@@ -208,6 +210,8 @@
 
      This filtering behavior is also known as "pruning" the list of compile
      targets.
+
+     If "additional_compile_targets" is absent, it defaults to the empty list.
 
   If input_path is -, input is read from stdin.
 
@@ -486,6 +490,24 @@
   Deletes the contents of the output directory except for args.gn and
   creates a Ninja build environment sufficient to regenerate the build.
 ```
+### <a name="cmd_clean_stale"></a>**gn clean_stale [\--ninja-executable=...] &lt;out_dir&gt;...**
+
+```
+  Removes the no longer needed output files from the build directory and prunes
+  their records from the ninja build log and dependency database. These are
+  output files that were generated from previous builds, but the current build
+  graph no longer references them.
+
+  This command requires a ninja executable of at least version 1.10.0. The
+  executable must be provided by the --ninja-executable switch.
+```
+
+#### **Options**
+
+```
+  --ninja-executable=<string>
+      Can be used to specify the ninja executable to use.
+```
 ### <a name="cmd_desc"></a>**gn desc**
 
 ```
@@ -678,9 +700,8 @@
 
 ```
   --dry-run
-      Does not change or output anything, but sets the process exit code based
-      on whether output would be different than what's on disk. This is useful
-      for presubmit/lint-type checks.
+      Prints the list of files that would be reformatted but does not write
+      anything to disk. This is useful for presubmit/lint-type checks.
       - Exit code 0: successful format, matches on disk.
       - Exit code 1: general failure (parse error, etc.)
       - Exit code 2: successful format, but differs from on disk.
@@ -692,6 +713,12 @@
   --stdin
       Read input from stdin and write to stdout rather than update a file
       in-place.
+
+  --read-tree=json
+      Reads an AST from stdin in the format output by --dump-tree=json and
+      uses that as the parse tree. (The only read-tree format currently
+      supported is json.) The given .gn file will be overwritten. This can be
+      used to programmatically transform .gn files.
 ```
 
 #### **Examples**
@@ -700,6 +727,7 @@
   gn format some\\BUILD.gn
   gn format /abspath/some/BUILD.gn
   gn format --stdin
+  gn format --read-tree=json //rewritten/BUILD.gn
 ```
 ### <a name="cmd_gen"></a>**gn gen [\--check] [&lt;ide options&gt;] &lt;out_dir&gt;**
 
@@ -719,6 +747,23 @@
   See "gn help switches" for the common command-line switches.
 ```
 
+#### **General options**
+
+```
+  --ninja-executable=<string>
+      Can be used to specify the ninja executable to use. This executable will
+      be used as an IDE option to indicate which ninja to use for building. This
+      executable will also be used as part of the gen process for triggering a
+      restat on generated ninja files and for use with --clean-stale.
+
+  --clean-stale
+      This option will cause no longer needed output files to be removed from
+      the build directory, and their records pruned from the ninja build log and
+      dependency database after the ninja build graph has been generated. This
+      option requires a ninja executable of at least version 1.10.0. It can be
+      provided by the --ninja-executable switch. Also see "gn help clean_stale".
+```
+
 #### **IDE options**
 
 ```
@@ -734,6 +779,7 @@
       "vs2015" - Visual Studio 2015 project/solution files.
       "vs2017" - Visual Studio 2017 project/solution files.
       "vs2019" - Visual Studio 2019 project/solution files.
+      "vs2022" - Visual Studio 2022 project/solution files.
       "xcode" - Xcode workspace/solution files.
       "qtcreator" - QtCreator project files.
       "json" - JSON file containing target information
@@ -761,6 +807,9 @@
       As an example, "10.0.15063.0" can be specified to use Creators Update SDK
       instead of the default one.
 
+  --ninja-executable=<string>
+      Can be used to specify the ninja executable to use when building.
+
   --ninja-extra-args=<string>
       This string is passed without any quoting to the ninja invocation
       command-line. Can be used to configure ninja flags, like "-j".
@@ -770,7 +819,7 @@
 
 ```
   --xcode-project=<file_name>
-      Override defaut Xcode project file name ("all"). The project file is
+      Override default Xcode project file name ("all"). The project file is
       written to the root build directory.
 
   --xcode-build-system=<value>
@@ -778,6 +827,34 @@
       values are (default to "legacy"):
       "legacy" - Legacy Build system
       "new" - New Build System
+
+  --xcode-configs=<config_name_list>
+      Configure the list of build configuration supported by the generated
+      project. If specified, must be a list of semicolon-separated strings.
+      If ommitted, a single configuration will be used in the generated
+      project derived from the build directory.
+
+  --xcode-config-build-dir=<string>
+      If present, must be a path relative to the source directory. It will
+      default to $root_out_dir if ommitted. The path is assumed to point to
+      the directory where ninja needs to be invoked. This variable can be
+      used to build for multiple configuration / platform / environment from
+      the same generated Xcode project (assuming that the user has created a
+      gn build directory with the correct args.gn for each).
+
+      One useful value is to use Xcode variables such as '${CONFIGURATION}'
+      or '${EFFECTIVE_PLATFORM}'.
+
+  --xcode-additional-files-patterns=<pattern_list>
+      If present, must be a list of semicolon-separated file patterns. It
+      will be used to add all files matching the pattern located in the
+      source tree to the project. It can be used to add, e.g. documentation
+      files to the project to allow easily edit them.
+
+  --xcode-additional-files-roots=<path_list>
+      If present, must be a list of semicolon-separated paths. It will be used
+      as roots when looking for additional files to add. If ommitted, defaults
+      to "//".
 
   --ninja-executable=<string>
       Can be used to specify the ninja executable to use when building.
@@ -846,11 +923,17 @@
       Produces a compile_commands.json file in the root of the build directory
       containing an array of “command objects”, where each command object
       specifies one way a translation unit is compiled in the project. If a list
-      of target_name is supplied, only targets that are reachable from the list
-      of target_name will be used for “command objects” generation, otherwise
-      all available targets will be used. This is used for various Clang-based
-      tooling, allowing for the replay of individual compilations independent
-      of the build system.
+      of target_name is supplied, only targets that are reachable from any
+      target in any build file whose name is target_name will be used for
+      “command objects” generation, otherwise all available targets will be used.
+      This is used for various Clang-based tooling, allowing for the replay of
+      individual compilations independent of the build system.
+      e.g. "foo" will match:
+      - "//path/to/src:foo"
+      - "//other/path:foo"
+      - "//foo:foo"
+      and not match:
+      - "//foo:bar"
 ```
 ### <a name="cmd_help"></a>**gn help &lt;anything&gt;**
 
@@ -961,17 +1044,18 @@
     A list of target labels from which to initiate the walk.
 
   --data
-    A list of keys from which to extract data. In each target walked, its metadata
-    scope is checked for the presence of these keys. If present, the contents of
-    those variable in the scope are appended to the results list.
+    A comma-separated list of keys from which to extract data. In each target
+    walked, its metadata scope is checked for the presence of these keys. If
+    present, the contents of those variable in the scope are appended to the
+    results list.
 
   --walk (optional)
-    A list of keys from which to control the walk. In each target walked, its
-    metadata scope is checked for the presence of any of these keys. If present,
-    the contents of those variables is checked to ensure that it is a label of
-    a valid dependency of the target and then added to the set of targets to walk.
-    If the empty string ("") is present in any of these keys, all deps and data_deps
-    are added to the walk set.
+    A comma-separated list of keys from which to control the walk. In each
+    target walked, its metadata scope is checked for the presence of any of
+    these keys. If present, the contents of those variables is checked to ensure
+    that it is a label of a valid dependency of the target and then added to the
+    set of targets to walk. If the empty string ("") is present in any of these
+    keys, all deps and data_deps are added to the walk set.
 
   --rebase (optional)
     A destination directory onto which to rebase any paths found. If set, all
@@ -986,7 +1070,7 @@
       Lists collected metaresults for the `files` key in the //base/foo:foo
       target and all of its dependency tree.
 
-  gn meta out/Debug "//base/foo" --data=files --data=other
+  gn meta out/Debug "//base/foo" --data=files,other
       Lists collected metaresults for the `files` and `other` keys in the
       //base/foo:foo target and all of its dependency tree.
 
@@ -1101,8 +1185,8 @@
 ### <a name="cmd_refs"></a>**gn refs**
 
 ```
-  gn refs <out_dir> (<label_pattern>|<label>|<file>|@<response_file>)*
-          [--all] [--default-toolchain] [--as=...] [--testonly=...] [--type=...]
+  gn refs <out_dir> (<label_pattern>|<label>|<file>|@<response_file>)* [--all]
+          [--default-toolchain] [--as=...] [--testonly=...] [--type=...]
 
   Finds reverse dependencies (which targets reference something). The input is
   a list containing:
@@ -1257,6 +1341,12 @@
   and stuff like other Python files required to run your script in the "inputs"
   variable.
 
+  Actions can take the configs and public_configs lists, as well as any of the
+  configs variables (defines, include_dirs, etc.) set directly on the target.
+  These behave exactly as they would on a binary target and can be accessed
+  using substitution patterns in the script args (see "gn help args") to
+  implement custom compiler-like tools.
+
   The "deps" and "public_deps" for an action will always be
   completed before any part of the action is run so it can depend on
   the output of previous steps. The "data_deps" will be built if the
@@ -1299,8 +1389,20 @@
 #### **Variables**
 
 ```
-  args, data, data_deps, depfile, deps, inputs, metadata, outputs*, pool,
-  response_file_contents, script*, sources
+  Flags: asmflags, cflags, cflags_c, cflags_cc, cflags_objc,
+         cflags_objcc, defines, include_dirs, inputs, ldflags,
+         lib_dirs, libs, precompiled_header, precompiled_source,
+         rustenv, rustflags, swiftflags, testonly
+  Dependent configs: all_dependent_configs, public_configs
+  Deps: assert_no_deps, data_deps, deps, public_deps, runtime_deps,
+        write_runtime_deps
+  General: check_includes, configs, data, friend, inputs, metadata,
+           output_extension, output_name, public, sources, testonly,
+           visibility
+  Action variables: args, bridge_header, configs, data, depfile,
+                    framework_dirs, inputs, module_deps, module_name,
+                    outputs*, pool, response_file_contents, script*,
+                    sources
   * = required
 ```
 
@@ -1388,8 +1490,20 @@
 #### **Variables**
 
 ```
-  args, data, data_deps, depfile, deps, inputs, metadata, outputs*, pool,
-  response_file_contents, script*, sources*
+  Flags: asmflags, cflags, cflags_c, cflags_cc, cflags_objc,
+         cflags_objcc, defines, include_dirs, inputs, ldflags,
+         lib_dirs, libs, precompiled_header, precompiled_source,
+         rustenv, rustflags, swiftflags, testonly
+  Dependent configs: all_dependent_configs, public_configs
+  Deps: assert_no_deps, data_deps, deps, public_deps, runtime_deps,
+        write_runtime_deps
+  General: check_includes, configs, data, friend, inputs, metadata,
+           output_extension, output_name, public, sources, testonly,
+           visibility
+  Action variables: args, bridge_header, configs, data, depfile,
+                    framework_dirs, inputs, module_deps, module_name,
+                    outputs*, pool, response_file_contents, script*,
+                    sources
   * = required
 ```
 
@@ -1416,14 +1530,14 @@
     args = [
       "{{source}}",
       "-o",
-      rebase_path(relative_target_gen_dir, root_build_dir) +
+      rebase_path(target_gen_dir, root_build_dir) +
         "/{{source_name_part}}.h" ]
   }
 ```
 ### <a name="func_bundle_data"></a>**bundle_data**: [iOS/macOS] Declare a target without output.
 
 ```
-  This target type allows to declare data that is required at runtime. It is
+  This target type allows one to declare data that is required at runtime. It is
   used to inform "create_bundle" targets of the files to copy into generated
   bundle, see "gn help create_bundle" for help.
 
@@ -1441,7 +1555,13 @@
 #### **Variables**
 
 ```
-  sources*, outputs*, deps, data_deps, metadata, public_deps, visibility
+  Dependent configs: all_dependent_configs, public_configs
+  Deps: assert_no_deps, data_deps, deps, public_deps, runtime_deps,
+        write_runtime_deps
+  General: check_includes, configs, data, friend, inputs, metadata,
+           output_extension, output_name, public, sources, testonly,
+           visibility
+  Bundle-specific: sources*, outputs*
   * = required
 ```
 
@@ -1491,6 +1611,23 @@
   mapping from each source file to an output file name using source expansion
   (see "gn help source_expansion"). The placeholders will look like
   "{{source_name_part}}", for example.
+
+  If you want to copy the output of a previous build step, the target that
+  generates the file to copy must be reachable from the deps or public_deps of
+  the copy target.
+```
+
+#### **Variables**
+
+```
+  Dependent configs: all_dependent_configs, public_configs
+  Deps: assert_no_deps, data_deps, deps, public_deps, runtime_deps,
+        write_runtime_deps
+  General: check_includes, configs, data, friend, inputs, metadata,
+           output_extension, output_name, public, sources, testonly,
+           visibility
+  Copy variables: sources*, outputs*
+  * = required
 ```
 
 #### **Examples**
@@ -1509,6 +1646,24 @@
     # Use source expansion to generate output files with the corresponding file
     # names in the gen dir. This will just copy each file.
     outputs = [ "$target_gen_dir/{{source_file_part}}" ]
+  }
+
+  # Copy the output of a generated executable.
+  copy("package_melon") {
+    # This example uses get_label_info() to compute the output directory of the
+    # dependency. This allows the copy rule to work regardless of the toolchain.
+    #
+    # In some cases (particularly actions defined previously in the same file)
+    # you can use get_target_outputs() to get the input file which can eliminate
+    # the assumptions about the output file name of the dependency.
+
+    input_dir = get_label_info("//src/tools/melon", "root_out_dir");
+    sources = [ "$input_dir/melon" ]
+
+    outputs = [ "$target_gen_dir/{{source_file_part}}" ]
+
+    # Depend on the target to build the file before copying.
+    deps = [ "//src/tools/melon" ]
   }
 ```
 ### <a name="func_create_bundle"></a>**create_bundle**: [ios/macOS] Build an iOS or macOS bundle.
@@ -1555,11 +1710,17 @@
 #### **Variables**
 
 ```
-  bundle_root_dir, bundle_contents_dir, bundle_resources_dir,
-  bundle_executable_dir, bundle_deps_filter, deps, data_deps, public_deps,
-  visibility, product_type, code_signing_args, code_signing_script,
-  code_signing_sources, code_signing_outputs, xcode_extra_attributes,
-  xcode_test_application_name, partial_info_plist, metadata
+  Dependent configs: all_dependent_configs, public_configs
+  Deps: assert_no_deps, data_deps, deps, public_deps, runtime_deps,
+        write_runtime_deps
+  General: check_includes, configs, data, friend, inputs, metadata,
+           output_extension, output_name, public, sources, testonly,
+           visibility
+  Bundle vars: bundle_root_dir, bundle_contents_dir, bundle_resources_dir,
+               bundle_executable_dir, bundle_deps_filter, product_type,
+               code_signing_args, code_signing_script, code_signing_sources,
+               code_signing_outputs, xcode_extra_attributes,
+               xcode_test_application_name, partial_info_plist
 ```
 
 #### **Example**
@@ -1676,14 +1837,15 @@
 #### **Variables**
 
 ```
-  Flags: cflags, cflags_c, cflags_cc, cflags_objc, cflags_objcc,
-         asmflags, defines, include_dirs, inputs, ldflags, lib_dirs,
-         libs, precompiled_header, precompiled_source, rustflags,
-         rustenv, swiftflags
-  Deps: data_deps, deps, public_deps
+  Flags: asmflags, cflags, cflags_c, cflags_cc, cflags_objc,
+         cflags_objcc, defines, include_dirs, inputs, ldflags,
+         lib_dirs, libs, precompiled_header, precompiled_source,
+         rustenv, rustflags, swiftflags, testonly
+  Deps: assert_no_deps, data_deps, deps, public_deps, runtime_deps,
+        write_runtime_deps
   Dependent configs: all_dependent_configs, public_configs
   General: check_includes, configs, data, friend, inputs, metadata,
-           output_name, output_extension, public, sources, testonly,
+           output_extension, output_name, public, sources, testonly,
            visibility
   Rust variables: aliased_deps, crate_root, crate_name
 ```
@@ -1699,16 +1861,28 @@
   specifying the intended location of the output file.
 
   The `output_conversion` variable specified the format to write the
-  value. See `gn help output_conversion`.
+  value. See `gn help io_conversion`.
 
-  One of `contents` or `data_keys` must be specified; use of `data` will write
-  the contents of that value to file, while use of `data_keys` will trigger a
-  metadata collection walk based on the dependencies of the target and the
-  optional values of the `rebase` and `walk_keys` variables. See
+  One of `contents` or `data_keys` must be specified; use of `contents` will
+  write the contents of that value to file, while use of `data_keys` will
+  trigger a metadata collection walk based on the dependencies of the target and
+  the optional values of the `rebase` and `walk_keys` variables. See
   `gn help metadata`.
 
   Collected metadata, if specified, will be returned in postorder of
   dependencies. See the example for details.
+```
+
+#### **Variables**
+
+```
+  Dependent configs: all_dependent_configs, public_configs
+  Deps: assert_no_deps, data_deps, deps, public_deps, runtime_deps,
+        write_runtime_deps
+  General: check_includes, configs, data, friend, inputs, metadata,
+           output_extension, output_name, public, sources, testonly,
+           visibility
+  Generated file: contents, data_keys, rebase, walk_keys, output_conversion
 ```
 
 #### **Example (metadata collection)**
@@ -1808,18 +1982,6 @@
       "../base/foo.cpp",  // from //base:a
     ]
 ```
-
-#### **Variables**
-
-```
-  contents
-  data_keys
-  rebase
-  walk_keys
-  output_conversion
-  Deps: data_deps, deps, public_deps
-  Dependent configs: all_dependent_configs, public_configs
-```
 ### <a name="func_group"></a>**group**: Declare a named group of targets.
 
 ```
@@ -1831,8 +1993,12 @@
 #### **Variables**
 
 ```
-  Deps: data_deps, deps, public_deps
+  Deps: assert_no_deps, data_deps, deps, public_deps, runtime_deps,
+        write_runtime_deps
   Dependent configs: all_dependent_configs, public_configs
+  General: check_includes, configs, data, friend, inputs, metadata,
+           output_extension, output_name, public, sources, testonly,
+           visibility
 ```
 
 #### **Example**
@@ -1870,14 +2036,15 @@
 #### **Variables**
 
 ```
-  Flags: cflags, cflags_c, cflags_cc, cflags_objc, cflags_objcc,
-         asmflags, defines, include_dirs, inputs, ldflags, lib_dirs,
-         libs, precompiled_header, precompiled_source, rustflags,
-         rustenv, swiftflags
-  Deps: data_deps, deps, public_deps
+  Flags: asmflags, cflags, cflags_c, cflags_cc, cflags_objc,
+         cflags_objcc, defines, include_dirs, inputs, ldflags,
+         lib_dirs, libs, precompiled_header, precompiled_source,
+         rustenv, rustflags, swiftflags, testonly
+  Deps: assert_no_deps, data_deps, deps, public_deps, runtime_deps,
+        write_runtime_deps
   Dependent configs: all_dependent_configs, public_configs
   General: check_includes, configs, data, friend, inputs, metadata,
-           output_name, output_extension, public, sources, testonly,
+           output_extension, output_name, public, sources, testonly,
            visibility
   Rust variables: aliased_deps, crate_root, crate_name, crate_type
 ```
@@ -1902,14 +2069,15 @@
 #### **Variables**
 
 ```
-  Flags: cflags, cflags_c, cflags_cc, cflags_objc, cflags_objcc,
-         asmflags, defines, include_dirs, inputs, ldflags, lib_dirs,
-         libs, precompiled_header, precompiled_source, rustflags,
-         rustenv, swiftflags
-  Deps: data_deps, deps, public_deps
+  Flags: asmflags, cflags, cflags_c, cflags_cc, cflags_objc,
+         cflags_objcc, defines, include_dirs, inputs, ldflags,
+         lib_dirs, libs, precompiled_header, precompiled_source,
+         rustenv, rustflags, swiftflags, testonly
+  Deps: assert_no_deps, data_deps, deps, public_deps, runtime_deps,
+        write_runtime_deps
   Dependent configs: all_dependent_configs, public_configs
   General: check_includes, configs, data, friend, inputs, metadata,
-           output_name, output_extension, public, sources, testonly,
+           output_extension, output_name, public, sources, testonly,
            visibility
   Rust variables: aliased_deps, crate_root, crate_name
 ```
@@ -1937,14 +2105,15 @@
 #### **Variables**
 
 ```
-  Flags: cflags, cflags_c, cflags_cc, cflags_objc, cflags_objcc,
-         asmflags, defines, include_dirs, inputs, ldflags, lib_dirs,
-         libs, precompiled_header, precompiled_source, rustflags,
-         rustenv, swiftflags
-  Deps: data_deps, deps, public_deps
+  Flags: asmflags, cflags, cflags_c, cflags_cc, cflags_objc,
+         cflags_objcc, defines, include_dirs, inputs, ldflags,
+         lib_dirs, libs, precompiled_header, precompiled_source,
+         rustenv, rustflags, swiftflags, testonly
+  Deps: assert_no_deps, data_deps, deps, public_deps, runtime_deps,
+        write_runtime_deps
   Dependent configs: all_dependent_configs, public_configs
   General: check_includes, configs, data, friend, inputs, metadata,
-           output_name, output_extension, public, sources, testonly,
+           output_extension, output_name, public, sources, testonly,
            visibility
   Rust variables: aliased_deps, crate_root, crate_name
 ```
@@ -1971,14 +2140,15 @@
 #### **Variables**
 
 ```
-  Flags: cflags, cflags_c, cflags_cc, cflags_objc, cflags_objcc,
-         asmflags, defines, include_dirs, inputs, ldflags, lib_dirs,
-         libs, precompiled_header, precompiled_source, rustflags,
-         rustenv, swiftflags
-  Deps: data_deps, deps, public_deps
+  Flags: asmflags, cflags, cflags_c, cflags_cc, cflags_objc,
+         cflags_objcc, defines, include_dirs, inputs, ldflags,
+         lib_dirs, libs, precompiled_header, precompiled_source,
+         rustenv, rustflags, swiftflags, testonly
+  Deps: assert_no_deps, data_deps, deps, public_deps, runtime_deps,
+        write_runtime_deps
   Dependent configs: all_dependent_configs, public_configs
   General: check_includes, configs, data, friend, inputs, metadata,
-           output_name, output_extension, public, sources, testonly,
+           output_extension, output_name, public, sources, testonly,
            visibility
   Rust variables: aliased_deps, crate_root, crate_name, crate_type
 ```
@@ -2016,14 +2186,15 @@
 #### **Variables**
 
 ```
-  Flags: cflags, cflags_c, cflags_cc, cflags_objc, cflags_objcc,
-         asmflags, defines, include_dirs, inputs, ldflags, lib_dirs,
-         libs, precompiled_header, precompiled_source, rustflags,
-         rustenv, swiftflags
-  Deps: data_deps, deps, public_deps
+  Flags: asmflags, cflags, cflags_c, cflags_cc, cflags_objc,
+         cflags_objcc, defines, include_dirs, inputs, ldflags,
+         lib_dirs, libs, precompiled_header, precompiled_source,
+         rustenv, rustflags, swiftflags, testonly
+  Deps: assert_no_deps, data_deps, deps, public_deps, runtime_deps,
+        write_runtime_deps
   Dependent configs: all_dependent_configs, public_configs
   General: check_includes, configs, data, friend, inputs, metadata,
-           output_name, output_extension, public, sources, testonly,
+           output_extension, output_name, public, sources, testonly,
            visibility
 ```
 ### <a name="func_static_library"></a>**static_library**: Declare a static library target.
@@ -2040,14 +2211,15 @@
 
 ```
   complete_static_lib
-  Flags: cflags, cflags_c, cflags_cc, cflags_objc, cflags_objcc,
-         asmflags, defines, include_dirs, inputs, ldflags, lib_dirs,
-         libs, precompiled_header, precompiled_source, rustflags,
-         rustenv, swiftflags
-  Deps: data_deps, deps, public_deps
+  Flags: asmflags, cflags, cflags_c, cflags_cc, cflags_objc,
+         cflags_objcc, defines, include_dirs, inputs, ldflags,
+         lib_dirs, libs, precompiled_header, precompiled_source,
+         rustenv, rustflags, swiftflags, testonly
+  Deps: assert_no_deps, data_deps, deps, public_deps, runtime_deps,
+        write_runtime_deps
   Dependent configs: all_dependent_configs, public_configs
   General: check_includes, configs, data, friend, inputs, metadata,
-           output_name, output_extension, public, sources, testonly,
+           output_extension, output_name, public, sources, testonly,
            visibility
   Rust variables: aliased_deps, crate_root, crate_name
 
@@ -2057,7 +2229,7 @@
   target containing both C and C++ sources is acceptable, but a
   target containing C and Rust sources is not).
 ```
-### <a name="func_target"></a>**target**: Declare an target with the given programmatic type.
+### <a name="func_target"></a>**target**: Declare a target with the given programmatic type.
 
 ```
   target(target_type_string, target_name_string) { ... }
@@ -2074,6 +2246,20 @@
     target("source_set", "doom_melon") {
   Is equivalent to:
     source_set("doom_melon") {
+```
+
+#### **Common target variables**
+
+```
+  Deps: assert_no_deps, data_deps, deps, public_deps, runtime_deps,
+        write_runtime_deps
+  Dependent configs: all_dependent_configs, public_configs
+  General: check_includes, configs, data, friend, inputs, metadata,
+           output_extension, output_name, public, sources, testonly,
+           visibility
+
+  Targets will also have variables specific to that type, see "gn help <type>"
+  for more.
 ```
 
 #### **Example**
@@ -2120,7 +2306,7 @@
   need to remove the corresponding config that sets it. The final set of flags,
   defines, etc. for a target is generated in this order:
 
-   1. The values specified directly on the target (rather than using a config.
+   1. The values specified directly on the target (rather than using a config).
    2. The configs specified in the target's "configs" list, in order.
    3. Public_configs from a breadth-first traversal of the dependency tree in
       the order that the targets appear in "deps".
@@ -2149,11 +2335,12 @@
 #### **Variables valid in a config definition**
 
 ```
-  Flags: cflags, cflags_c, cflags_cc, cflags_objc, cflags_objcc,
-         asmflags, defines, include_dirs, inputs, ldflags, lib_dirs,
-         libs, precompiled_header, precompiled_source, rustflags,
-         rustenv, swiftflags
+  Flags: asmflags, cflags, cflags_c, cflags_cc, cflags_objc,
+         cflags_objcc, defines, include_dirs, inputs, ldflags,
+         lib_dirs, libs, precompiled_header, precompiled_source,
+         rustenv, rustflags, swiftflags, testonly
   Nested configs: configs
+  General: visibility
 ```
 
 #### **Variables on a target used to apply configs**
@@ -2303,7 +2490,7 @@
       unspecified or the empty list which means no arguments.
 
   input_conversion:
-      Controls how the file is read and parsed. See "gn help io_conversion".
+      Controls how the file is read and parsed. See `gn help io_conversion`.
 
       If unspecified, defaults to the empty string which causes the script
       result to be discarded. exec script will return None.
@@ -2812,6 +2999,35 @@
 
   print(sources, deps)
 ```
+### <a name="func_print_stack_trace"></a>**print_stack_trace**: Prints a stack trace.
+
+```
+  Prints the current file location, and all template invocations that led up to
+  this location, to the console.
+```
+
+#### **Examples**
+
+```
+  template("foo"){
+    print_stack_trace()
+  }
+  template("bar"){
+    foo(target_name + ".foo") {
+      baz = invoker.baz
+    }
+  }
+  bar("lala") {
+    baz = 42
+  }
+
+  will print out the following:
+
+  print_stack_trace() initiated at  //build.gn:2
+    bar("lala")  //BUILD.gn:9
+    foo("lala.foo")  //BUILD.gn:5
+    print_stack_trace()  //BUILD.gn:2
+```
 ### <a name="func_process_file_template"></a>**process_file_template**: Do template expansion over a list of files.
 
 ```
@@ -2873,7 +3089,7 @@
       Filename to read, relative to the build file.
 
   input_conversion
-      Controls how the file is read and parsed. See "gn help io_conversion".
+      Controls how the file is read and parsed. See `gn help io_conversion`.
 ```
 
 #### **Example**
@@ -3050,12 +3266,6 @@
     # you don't want the default for a particular default:
     configs -= [ "//tools/mything:settings" ]
   }
-```
-### <a name="func_set_sources_assignment_filter"></a>**set_sources_assignment_filter**: Deprecated feature.
-
-```
-  This feature is deprecated. It will be removed once all usages have been
-  removed. Only supports a single argument that needs to be an empty list.
 ```
 ### <a name="func_split_list"></a>**split_list**: Splits a list into N different sub-lists.
 
@@ -3511,8 +3721,7 @@
         {{target_output_name}}, {{output_extension}} and {{output_dir}} allows
         the target to override these values.
           outputs = [
-            "{{output_dir}}/{{target_output_name}}"
-                "{{output_extension}}",
+            "{{output_dir}}/{{target_output_name}}{{output_extension}}",
             "{{output_dir}}/{{target_output_name}}.lib",
           ]
 
@@ -3625,6 +3834,14 @@
         If specified, this list is the subset of the outputs that should be
         added to runtime deps (see "gn help runtime_deps"). By default (if
         runtime_outputs is empty or unspecified), it will be the link_output.
+
+    rust_sysroot
+        Valid for: Rust tools
+
+        A path relative to root_out_dir. This is not used in the build
+        process, but may be used when generating metadata for rust-analyzer.
+        (See --export-rust-project). It enables such metadata to include
+        information about the Rust standard library.
 ```
 
 #### **Expansions for tool variables**
@@ -3834,7 +4051,7 @@
 
   The Swift tool has multiple input and outputs. It must have exactly one
   output of .swiftmodule type, but can have one or more object file outputs,
-  in addition to other type of ouputs. The following expansions are available:
+  in addition to other type of outputs. The following expansions are available:
 
     {{module_name}}
         Expands to the string representing the module name of target under
@@ -3897,14 +4114,12 @@
       command = "..."
       outputs = [
         "{{output_dir}}/{{target_output_name}}{{output_extension}}",
-        "{{output_dir}}/{{target_output_name}}"
-            "{{output_extension}}.TOC",
+        "{{output_dir}}/{{target_output_name}}{{output_extension}}.TOC",
       ]
       link_output =
         "{{output_dir}}/{{target_output_name}}{{output_extension}}"
       depend_output =
-        "{{output_dir}}/{{target_output_name}}"
-            "{{output_extension}}.TOC"
+        "{{output_dir}}/{{target_output_name}}{{output_extension}}.TOC"
       restat = true
     }
 ```
@@ -4110,7 +4325,7 @@
       The list or string to write.
 
   output_conversion
-    Controls how the output is written. See "gn help io_conversion".
+    Controls how the output is written. See `gn help io_conversion`.
 ```
 ## <a name="predefined_variables"></a>Built-in predefined variables
 
@@ -4180,7 +4395,7 @@
   This is value is exposed so that cross-compile toolchains can access the host
   architecture when needed.
 
-  The value should generally be considered read-only, but it can be overriden
+  The value should generally be considered read-only, but it can be overridden
   in order to handle unusual cases where there might be multiple plausible
   values for the host architecture (e.g., if you can do either 32-bit or 64-bit
   builds). The value is not used internally by GN for any purpose.
@@ -4325,6 +4540,13 @@
   - "arm"
   - "arm64"
   - "mipsel"
+  - "mips64el"
+  - "s390x"
+  - "ppc64"
+  - "riscv32"
+  - "riscv64"
+  - "e2k"
+  - "loong64"
 ```
 ### <a name="var_target_gen_dir"></a>**target_gen_dir**: Directory for a target's generated files.
 
@@ -4347,7 +4569,7 @@
 ```
   action("myscript") {
     # Pass the generated output dir to the script.
-    args = [ "-o", rebase_path(target_gen_dir, root_build_dir) ]"
+    args = [ "-o", rebase_path(target_gen_dir, root_build_dir) ]
   }
 ```
 ### <a name="var_target_name"></a>**target_name**: [string] The name of the current target.
@@ -4450,7 +4672,7 @@
 ```
   action("myscript") {
     # Pass the output dir to the script.
-    args = [ "-o", rebase_path(target_out_dir, root_build_dir) ]"
+    args = [ "-o", rebase_path(target_out_dir, root_build_dir) ]
   }
 ```
 ## <a name="target_variables"></a>Variables you set in targets
@@ -4516,7 +4738,7 @@
      those configs appear in the list.
   5. all_dependent_configs pulled from dependencies, in the order of
      the "deps" list. This is done recursively. If a config appears
-     more than once, only the first occurence will be used.
+     more than once, only the first occurrence will be used.
   6. public_configs pulled from dependencies, in the order of the
      "deps" list. If a dependency is public, they will be applied
      recursively.
@@ -4622,7 +4844,7 @@
      those configs appear in the list.
   5. all_dependent_configs pulled from dependencies, in the order of
      the "deps" list. This is done recursively. If a config appears
-     more than once, only the first occurence will be used.
+     more than once, only the first occurrence will be used.
   6. public_configs pulled from dependencies, in the order of the
      "deps" list. If a dependency is public, they will be applied
      recursively.
@@ -4633,6 +4855,14 @@
   For action and action_foreach targets, args is the list of arguments to pass
   to the script. Typically you would use source expansion (see "gn help
   source_expansion") to insert the source file names.
+
+  Args can also expand the substitution patterns corresponding to config
+  variables in the same way that compiler tools (see "gn help tool") do. These
+  allow actions that run compiler or compiler-like tools to access the results
+  of propagating configs through the build graph. For example:
+
+  args = [ "{{defines}}", "{{include_dirs}}", "{{rustenv}}", "--input-file",
+           "{{source}}" ]
 
   See also "gn help action" and "gn help action_foreach".
 ```
@@ -4657,7 +4887,7 @@
      those configs appear in the list.
   5. all_dependent_configs pulled from dependencies, in the order of
      the "deps" list. This is done recursively. If a config appears
-     more than once, only the first occurence will be used.
+     more than once, only the first occurrence will be used.
   6. public_configs pulled from dependencies, in the order of the
      "deps" list. If a dependency is public, they will be applied
      recursively.
@@ -4836,7 +5066,7 @@
      those configs appear in the list.
   5. all_dependent_configs pulled from dependencies, in the order of
      the "deps" list. This is done recursively. If a config appears
-     more than once, only the first occurence will be used.
+     more than once, only the first occurrence will be used.
   6. public_configs pulled from dependencies, in the order of the
      "deps" list. If a dependency is public, they will be applied
      recursively.
@@ -4870,7 +5100,7 @@
      those configs appear in the list.
   5. all_dependent_configs pulled from dependencies, in the order of
      the "deps" list. This is done recursively. If a config appears
-     more than once, only the first occurence will be used.
+     more than once, only the first occurrence will be used.
   6. public_configs pulled from dependencies, in the order of the
      "deps" list. If a dependency is public, they will be applied
      recursively.
@@ -4904,7 +5134,7 @@
      those configs appear in the list.
   5. all_dependent_configs pulled from dependencies, in the order of
      the "deps" list. This is done recursively. If a config appears
-     more than once, only the first occurence will be used.
+     more than once, only the first occurrence will be used.
   6. public_configs pulled from dependencies, in the order of the
      "deps" list. If a dependency is public, they will be applied
      recursively.
@@ -4938,7 +5168,7 @@
      those configs appear in the list.
   5. all_dependent_configs pulled from dependencies, in the order of
      the "deps" list. This is done recursively. If a config appears
-     more than once, only the first occurence will be used.
+     more than once, only the first occurrence will be used.
   6. public_configs pulled from dependencies, in the order of the
      "deps" list. If a dependency is public, they will be applied
      recursively.
@@ -4972,7 +5202,7 @@
      those configs appear in the list.
   5. all_dependent_configs pulled from dependencies, in the order of
      the "deps" list. This is done recursively. If a config appears
-     more than once, only the first occurence will be used.
+     more than once, only the first occurrence will be used.
   6. public_configs pulled from dependencies, in the order of the
      "deps" list. If a dependency is public, they will be applied
      recursively.
@@ -5134,7 +5364,7 @@
      those configs appear in the list.
   5. all_dependent_configs pulled from dependencies, in the order of
      the "deps" list. This is done recursively. If a config appears
-     more than once, only the first occurence will be used.
+     more than once, only the first occurrence will be used.
   6. public_configs pulled from dependencies, in the order of the
      "deps" list. If a dependency is public, they will be applied
      recursively.
@@ -5202,7 +5432,7 @@
 
   Options for this field are "cdylib", "staticlib", "proc-macro", and "dylib".
   This field sets the `crate-type` attribute for the `rustc` tool on static
-  libraries, as well as the appropiate output extension in the
+  libraries, as well as the appropriate output extension in the
   `rust_output_extension` attribute. Since outputs must be explicit, the `lib`
   crate type (where the Rust compiler produces what it thinks is the
   appropriate library type) is not supported.
@@ -5299,7 +5529,7 @@
      those configs appear in the list.
   5. all_dependent_configs pulled from dependencies, in the order of
      the "deps" list. This is done recursively. If a config appears
-     more than once, only the first occurence will be used.
+     more than once, only the first occurrence will be used.
   6. public_configs pulled from dependencies, in the order of the
      "deps" list. If a dependency is public, they will be applied
      recursively.
@@ -5324,7 +5554,7 @@
   The .d file should go in the target output directory. If you have more than
   one source file that the script is being run over, you can use the output
   file expansions described in "gn help action_foreach" to name the .d file
-  according to the input."
+  according to the input.
 
   The format is that of a Makefile and all paths must be relative to the root
   build directory. Only one output may be listed and it must match the first
@@ -5427,7 +5657,7 @@
      those configs appear in the list.
   5. all_dependent_configs pulled from dependencies, in the order of
      the "deps" list. This is done recursively. If a config appears
-     more than once, only the first occurence will be used.
+     more than once, only the first occurrence will be used.
   6. public_configs pulled from dependencies, in the order of the
      "deps" list. If a dependency is public, they will be applied
      recursively.
@@ -5459,7 +5689,7 @@
      those configs appear in the list.
   5. all_dependent_configs pulled from dependencies, in the order of
      the "deps" list. This is done recursively. If a config appears
-     more than once, only the first occurence will be used.
+     more than once, only the first occurrence will be used.
   6. public_configs pulled from dependencies, in the order of the
      "deps" list. If a dependency is public, they will be applied
      recursively.
@@ -5531,6 +5761,18 @@
     ]
   }
 ```
+### <a name="var_gen_deps"></a>**gen_deps**: Declares targets that should generate when this one does.
+
+```
+  A list of target labels.
+
+  Not all GN targets that get evaluated are actually turned into ninja targets
+  (see "gn help execution"). If this target is generated, then any targets in
+  the "gen_deps" list will also be generated, regardless of the usual critera.
+
+  Since "gen_deps" are not build time dependencies, there can be cycles between
+  "deps" and "gen_deps" or within "gen_deps" itself.
+```
 ### <a name="var_include_dirs"></a>**include_dirs**: Additional include directories.
 
 ```
@@ -5552,7 +5794,7 @@
      those configs appear in the list.
   5. all_dependent_configs pulled from dependencies, in the order of
      the "deps" list. This is done recursively. If a config appears
-     more than once, only the first occurence will be used.
+     more than once, only the first occurrence will be used.
   6. public_configs pulled from dependencies, in the order of the
      "deps" list. If a dependency is public, they will be applied
      recursively.
@@ -5660,7 +5902,7 @@
      those configs appear in the list.
   5. all_dependent_configs pulled from dependencies, in the order of
      the "deps" list. This is done recursively. If a config appears
-     more than once, only the first occurence will be used.
+     more than once, only the first occurrence will be used.
   6. public_configs pulled from dependencies, in the order of the
      "deps" list. If a dependency is public, they will be applied
      recursively.
@@ -5693,7 +5935,7 @@
      those configs appear in the list.
   5. all_dependent_configs pulled from dependencies, in the order of
      the "deps" list. This is done recursively. If a config appears
-     more than once, only the first occurence will be used.
+     more than once, only the first occurrence will be used.
   6. public_configs pulled from dependencies, in the order of the
      "deps" list. If a dependency is public, they will be applied
      recursively.
@@ -5756,7 +5998,7 @@
      those configs appear in the list.
   5. all_dependent_configs pulled from dependencies, in the order of
      the "deps" list. This is done recursively. If a config appears
-     more than once, only the first occurence will be used.
+     more than once, only the first occurrence will be used.
   6. public_configs pulled from dependencies, in the order of the
      "deps" list. If a dependency is public, they will be applied
      recursively.
@@ -5783,7 +6025,7 @@
   Generally, these keys will include three types of lists: lists of ordinary
   strings, lists of filenames intended to be rebased according to their
   particular source directory, and lists of target labels intended to be used
-  as barriers to the walk. Verfication of these categories occurs at walk time,
+  as barriers to the walk. Verification of these categories occurs at walk time,
   not creation time (since it is not clear until the walk which values are
   intended for which purpose).
 ```
@@ -5811,7 +6053,7 @@
 
 ```
   Controls how the "contents" of a generated_file target is formatted.
-  See "gn help io_conversion".
+  See `gn help io_conversion`.
 ```
 ### <a name="var_output_dir"></a>**output_dir**: [directory] Directory to put output file in.
 
@@ -6133,7 +6375,7 @@
 
 ```
   Public configs are applied to all targets that depend directly on this one.
-  These dependant targets can further push this target's public configs
+  These dependent targets can further push this target's public configs
   higher in the dependency tree by depending on it via public_deps (see "gn
   help public_deps").
 
@@ -6202,7 +6444,7 @@
      those configs appear in the list.
   5. all_dependent_configs pulled from dependencies, in the order of
      the "deps" list. This is done recursively. If a config appears
-     more than once, only the first occurence will be used.
+     more than once, only the first occurrence will be used.
   6. public_configs pulled from dependencies, in the order of the
      "deps" list. If a dependency is public, they will be applied
      recursively.
@@ -6382,7 +6624,7 @@
      those configs appear in the list.
   5. all_dependent_configs pulled from dependencies, in the order of
      the "deps" list. This is done recursively. If a config appears
-     more than once, only the first occurence will be used.
+     more than once, only the first occurrence will be used.
   6. public_configs pulled from dependencies, in the order of the
      "deps" list. If a dependency is public, they will be applied
      recursively.
@@ -6502,7 +6744,7 @@
      those configs appear in the list.
   5. all_dependent_configs pulled from dependencies, in the order of
      the "deps" list. This is done recursively. If a config appears
-     more than once, only the first occurence will be used.
+     more than once, only the first occurrence will be used.
   6. public_configs pulled from dependencies, in the order of the
      "deps" list. If a dependency is public, they will be applied
      recursively.
@@ -6717,13 +6959,18 @@
       cause the file //BUILD.gn to be loaded. Note that build_file_extension
       applies to the default case as well.
 
-  script_executable [optional]
-      Path to specific Python executable or other interpreter to use in
-      action targets and exec_script calls. By default GN searches the
-      PATH for Python to execute these scripts.
+      The command-line switch --root-target will override this value (see "gn
+      help --root-target").
 
-      If set to the empty string, the path specified in action targets
-      and exec_script calls will be executed directly.
+  script_executable [optional]
+      By default, GN runs the scripts used in action targets and exec_script
+      calls using the Python interpreter found in PATH. This value specifies the
+      Python executable or other interpreter to use instead.
+
+      If set to the empty string, the scripts will be executed directly.
+
+      The command-line switch --script-executable will override this value (see
+      "gn help --script-executable")
 
   secondary_source [optional]
       Label of an alternate directory tree to find input files. When searching
@@ -6740,7 +6987,7 @@
   default_args [optional]
       Scope containing the default overrides for declared arguments. These
       overrides take precedence over the default values specified in the
-      declare_args() block, but can be overriden using --args or the
+      declare_args() block, but can be overridden using --args or the
       args.gn file.
 
       This is intended to be used when subprojects declare arguments with
@@ -6848,6 +7095,13 @@
   required (directly or transitively) to build a target in the default
   toolchain.
 
+  Some targets might be associated but without a formal build dependency (for
+  example, related tools or optional variants). A target that is marked as
+  "generated" can propagate its generated state to an associated target using
+  "gen_deps". This will make the referenced dependency have Ninja rules
+  generated in the same cases the source target has but without a build-time
+  dependency and even in non-default toolchains.
+
   See also "gn help ninja_rules".
 ```
 
@@ -6923,12 +7177,10 @@
 
       string           = `"` { char | escape | expansion } `"` .
       escape           = `\` ( "$" | `"` | char ) .
-      BracketExpansion = "{" ( identifier | ArrayAccess | ScopeAccess "
-                         ") "}" .
+      BracketExpansion = "{" ( identifier | ArrayAccess | ScopeAccess ) "}" .
       Hex              = "0x" [0-9A-Fa-f][0-9A-Fa-f]
       expansion        = "$" ( identifier | BracketExpansion | Hex ) .
-      char             = /* any character except "$", `"`, or newline "
-                        "*/ .
+      char             = /* any character except "$", `"`, or newline */ .
 
   After a backslash, certain sequences represent special characters:
 
@@ -7056,19 +7308,20 @@
 ```
   All execution happens in the context of a scope which holds the current state
   (like variables). With the exception of loops and conditions, '{' introduces
-  a new scope that has a parent reference to the old scope.
+  a new scope.
 
-  Variable reads recursively search all nested scopes until the variable is
-  found or there are no more scopes. Variable writes always go into the current
-  scope. This means that after the closing '}' (again excepting loops and
-  conditions), all local variables will be restored to the previous values.
-  This also means that "foo = foo" can do useful work by copying a variable
-  into the current scope that was defined in a containing scope.
+  Most scopes have a parent reference to the old scope. Variable reads
+  recursively search all parent scopes until the variable is found or there are
+  no more scopes. Variable writes always go into the current scope. This means
+  that after the closing '}' (again excepting loops and conditions), all local
+  variables will be restored to the previous values.  This also means that "foo
+  = foo" can do useful work by copying a variable into the current scope that
+  was defined in a containing scope.
 
-  Scopes can also be assigned to variables. Such scopes can be created by
-  functions like exec_script, when invoking a template (the template code
-  refers to the variables set by the invoking code by the implicitly-created
-  "invoker" scope), or explicitly like:
+  Scopes can be assigned to variables. Examples of such scopes are the
+  implicitly-created "invoker" when invoking a template (which refers to the
+  variables set by the invoking code), scopes created by functions like
+  exec_script, and scopes explicitly created like
 
     empty_scope = {}
     myvalues = {
@@ -7076,10 +7329,14 @@
       bar = "something"
     }
 
-  Inside such a scope definition can be any GN code including conditionals and
-  function calls. After the close of the scope, it will contain all variables
-  explicitly set by the code contained inside it. After this, the values can be
-  read, modified, or added to:
+  In the case of explicitly created scopes and scopes created by functions like
+  exec_script, there is no reference to the parent scope. Such scopes are fully
+  self-contained and do not "inherit" values from their defining scope.
+
+  Inside an explicit scope definition can be any GN code including conditionals
+  and function calls. After the close of the scope, it will contain all
+  variables explicitly set by the code contained inside it. After this, the
+  values can be read, modified, or added to:
 
     myvalues.foo += 2
     empty_scope.new_thing = [ 1, 2, 3 ]
@@ -7756,9 +8013,11 @@
     *   --dotfile: Override the name of the ".gn" file.
     *   --fail-on-unused-args: Treat unused build args as fatal errors.
     *   --markdown: Write help output in the Markdown format.
+    *   --ninja-executable: Set the Ninja executable.
     *   --nocolor: Force non-colored output.
     *   -q: Quiet mode. Don't print output on success.
     *   --root: Explicitly specify source root.
+    *   --root-target: Override the root target.
     *   --runtime-deps-list-file: Save runtime dependencies for targets in file.
     *   --script-executable: Set the executable used to execute scripts.
     *   --threads: Specify number of worker threads.

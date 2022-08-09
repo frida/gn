@@ -10,9 +10,9 @@
 #include <tuple>
 
 #include "base/json/string_escape.h"
+#include "base/strings/string_split.h"
 #include "gn/builder.h"
 #include "gn/deps_iterator.h"
-#include "gn/filesystem_utils.h"
 #include "gn/ninja_target_command_util.h"
 #include "gn/rust_project_writer_helpers.h"
 #include "gn/rust_tool.h"
@@ -29,9 +29,6 @@
 // Current structure of rust-project.json output file
 //
 // {
-//    "roots": [
-//      "some/source/root"  // each crate's source root
-//    ],
 //    "crates": [
 //        {
 //            "deps": [
@@ -40,6 +37,13 @@
 //                    "name": "alloc" // extern name of dependency
 //                },
 //            ],
+//            "source": [
+//                "include_dirs": [
+//                     "some/source/root",
+//                     "some/gen/dir",
+//                ],
+//                "exclude_dirs": []
+//            },
 //            "edition": "2018", // edition of crate
 //            "cfg": [
 //              "unix", // "atomic" value config options
@@ -70,12 +74,7 @@ bool RustProjectWriter::RunAndWriteFiles(const BuildSettings* build_settings,
   std::ostream out(&out_buffer);
 
   RenderJSON(build_settings, all_targets, out);
-
-  if (out_buffer.ContentsEqual(output_path)) {
-    return true;
-  }
-
-  return out_buffer.WriteToFile(output_path, err);
+  return out_buffer.WriteToFileIfChanged(output_path, err);
 }
 
 // Map of Targets to their index in the crates list (for linking dependencies to
@@ -174,15 +173,15 @@ const std::string_view sysroot_crates[] = {"std",
                                            "unwind"};
 
 // Multiple sysroot crates have dependenices on each other.  This provides a
-// mechanism for specifiying that in an extendible manner.
+// mechanism for specifying that in an extendible manner.
 const std::unordered_map<std::string_view, std::vector<std::string_view>>
     sysroot_deps_map = {{"alloc", {"core"}},
                         {"std", {"alloc", "core", "panic_abort", "unwind"}}};
 
 // Add each of the crates a sysroot has, including their dependencies.
 void AddSysrootCrate(const BuildSettings* build_settings,
-                     const std::string_view crate,
-                     const std::string_view current_sysroot,
+                     std::string_view crate,
+                     std::string_view current_sysroot,
                      SysrootCrateIndexMap& sysroot_crate_lookup,
                      CrateList& crate_list) {
   if (sysroot_crate_lookup.find(crate) != sysroot_crate_lookup.end()) {
@@ -209,8 +208,8 @@ void AddSysrootCrate(const BuildSettings* build_settings,
       FilePathToUTF8(rebased_out_dir) + std::string(current_sysroot) +
       "/lib/rustlib/src/rust/library/" + std::string(crate) + "/src/lib.rs";
 
-  Crate sysroot_crate =
-      Crate(SourceFile(crate_path), crate_index, std::string(crate), "2018");
+  Crate sysroot_crate = Crate(SourceFile(crate_path), std::nullopt, crate_index,
+                              std::string(crate), "2018");
 
   sysroot_crate.AddConfigItem("debug_assertions");
 
@@ -227,7 +226,7 @@ void AddSysrootCrate(const BuildSettings* build_settings,
 
 // Add the given sysroot to the project, if it hasn't already been added.
 void AddSysroot(const BuildSettings* build_settings,
-                const std::string_view sysroot,
+                std::string_view sysroot,
                 SysrootIndexMap& sysroot_lookup,
                 CrateList& crate_list) {
   // If this sysroot is already in the lookup, we don't add it again.
@@ -244,7 +243,7 @@ void AddSysroot(const BuildSettings* build_settings,
 
 void AddSysrootDependencyToCrate(Crate* crate,
                                  const SysrootCrateIndexMap& sysroot,
-                                 const std::string_view crate_name) {
+                                 std::string_view crate_name) {
   if (const auto crate_idx = sysroot.find(crate_name);
       crate_idx != sysroot.end()) {
     crate->AddDependency(crate_idx->second, std::string(crate_name));
@@ -295,8 +294,10 @@ void AddTarget(const BuildSettings* build_settings,
     edition = FindArgValue("--edition", compiler_args);
   }
 
-  Crate crate =
-      Crate(crate_root, crate_id, crate_label, edition.value_or("2015"));
+  auto gen_dir = GetBuildDirForTargetAsOutputFile(target, BuildDirType::GEN);
+
+  Crate crate = Crate(crate_root, gen_dir, crate_id, crate_label,
+                      edition.value_or("2015"));
 
   crate.SetCompilerArgs(compiler_args);
   if (compiler_target.has_value())
@@ -326,6 +327,26 @@ void AddTarget(const BuildSettings* build_settings,
     }
   }
 
+  // If it's a proc macro, record its output location so IDEs can invoke it.
+  if (std::string_view(rust_tool->name()) ==
+      std::string_view(RustTool::kRsToolMacro)) {
+    auto outputs = target->computed_outputs();
+    if (outputs.size() > 0) {
+      crate.SetIsProcMacro(outputs[0]);
+    }
+  }
+
+  // Note any environment variables. These may be used by proc macros
+  // invoked by the current crate (so we want to record these for all crates,
+  // not just proc macro crates)
+  for (const auto& env_var : target->config_values().rustenv()) {
+    std::vector<std::string> parts = base::SplitString(
+        env_var, "=", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
+    if (parts.size() >= 2) {
+      crate.AddRustenv(parts[0], parts[1]);
+    }
+  }
+
   // Add the rest of the crate dependencies.
   for (const auto& dep : crate_deps) {
     auto idx = lookup[dep];
@@ -338,24 +359,7 @@ void AddTarget(const BuildSettings* build_settings,
 void WriteCrates(const BuildSettings* build_settings,
                  CrateList& crate_list,
                  std::ostream& rust_project) {
-  // produce a de-duplicated set of source roots:
-  std::set<std::string> roots;
-  for (auto& crate : crate_list) {
-    roots.insert(
-        FilePathToUTF8(build_settings->GetFullPath(crate.root().GetDir())));
-  }
-
   rust_project << "{" NEWLINE;
-  rust_project << "  \"roots\": [";
-  bool first_root = true;
-  for (auto& root : roots) {
-    if (!first_root)
-      rust_project << ",";
-    first_root = false;
-
-    rust_project << NEWLINE "    \"" << root << "\"";
-  }
-  rust_project << NEWLINE "  ]," NEWLINE;
   rust_project << "  \"crates\": [";
   bool first_crate = true;
   for (auto& crate : crate_list) {
@@ -369,7 +373,25 @@ void WriteCrates(const BuildSettings* build_settings,
     rust_project << NEWLINE << "    {" NEWLINE
                  << "      \"crate_id\": " << crate.index() << "," NEWLINE
                  << "      \"root_module\": \"" << crate_module << "\"," NEWLINE
-                 << "      \"label\": \"" << crate.label() << "\"," NEWLINE;
+                 << "      \"label\": \"" << crate.label() << "\"," NEWLINE
+                 << "      \"source\": {" NEWLINE
+                 << "          \"include_dirs\": [" NEWLINE
+                 << "               \""
+                 << FilePathToUTF8(
+                        build_settings->GetFullPath(crate.root().GetDir()))
+                 << "\"";
+    auto gen_dir = crate.gen_dir();
+    if (gen_dir.has_value()) {
+      auto gen_dir_path = FilePathToUTF8(
+          build_settings->GetFullPath(gen_dir->AsSourceDir(build_settings)));
+      rust_project << "," NEWLINE << "               \"" << gen_dir_path
+                   << "\"" NEWLINE;
+    } else {
+      rust_project << NEWLINE;
+    }
+    rust_project << "          ]," NEWLINE
+                 << "          \"exclude_dirs\": []" NEWLINE
+                 << "      }," NEWLINE;
 
     auto compiler_target = crate.CompilerTarget();
     if (compiler_target.has_value()) {
@@ -410,6 +432,15 @@ void WriteCrates(const BuildSettings* build_settings,
 
     rust_project << "      \"edition\": \"" << crate.edition() << "\"," NEWLINE;
 
+    auto proc_macro_target = crate.proc_macro_path();
+    if (proc_macro_target.has_value()) {
+      rust_project << "      \"is_proc_macro\": true," NEWLINE;
+      auto so_location = FilePathToUTF8(build_settings->GetFullPath(
+          proc_macro_target->AsSourceFile(build_settings)));
+      rust_project << "      \"proc_macro_dylib_path\": \"" << so_location
+                   << "\"," NEWLINE;
+    }
+
     rust_project << "      \"cfg\": [";
     bool first_cfg = true;
     for (const auto& cfg : crate.configs()) {
@@ -424,8 +455,29 @@ void WriteCrates(const BuildSettings* build_settings,
       rust_project << "        \"" << escaped_config << "\"";
     }
     rust_project << NEWLINE;
-    rust_project << "      ]" NEWLINE;  // end cfgs
+    rust_project << "      ]";  // end cfgs
 
+    if (!crate.rustenv().empty()) {
+      rust_project << "," NEWLINE;
+      rust_project << "      \"env\": {";
+      bool first_env = true;
+      for (const auto& env : crate.rustenv()) {
+        if (!first_env)
+          rust_project << ",";
+        first_env = false;
+        std::string escaped_key, escaped_val;
+        base::EscapeJSONString(env.first, false, &escaped_key);
+        base::EscapeJSONString(env.second, false, &escaped_val);
+        rust_project << NEWLINE;
+        rust_project << "        \"" << escaped_key << "\": \"" << escaped_val
+                     << "\"";
+      }
+
+      rust_project << NEWLINE;
+      rust_project << "      }" NEWLINE;  // end env vars
+    } else {
+      rust_project << NEWLINE;
+    }
     rust_project << "    }";  // end crate
   }
   rust_project << NEWLINE "  ]" NEWLINE;  // end crate list

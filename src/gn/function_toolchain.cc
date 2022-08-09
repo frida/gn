@@ -470,8 +470,7 @@ Tool variables
         {{target_output_name}}, {{output_extension}} and {{output_dir}} allows
         the target to override these values.
           outputs = [
-            "{{output_dir}}/{{target_output_name}}"
-                "{{output_extension}}",
+            "{{output_dir}}/{{target_output_name}}{{output_extension}}",
             "{{output_dir}}/{{target_output_name}}.lib",
           ]
 
@@ -584,6 +583,14 @@ Tool variables
         If specified, this list is the subset of the outputs that should be
         added to runtime deps (see "gn help runtime_deps"). By default (if
         runtime_outputs is empty or unspecified), it will be the link_output.
+
+    rust_sysroot
+        Valid for: Rust tools
+
+        A path relative to root_out_dir. This is not used in the build
+        process, but may be used when generating metadata for rust-analyzer.
+        (See --export-rust-project). It enables such metadata to include
+        information about the Rust standard library.
 
 )"  // String break to prevent overflowing the 16K max VC string length.
     R"(Expansions for tool variables
@@ -793,7 +800,7 @@ Tool variables
 
   The Swift tool has multiple input and outputs. It must have exactly one
   output of .swiftmodule type, but can have one or more object file outputs,
-  in addition to other type of ouputs. The following expansions are available:
+  in addition to other type of outputs. The following expansions are available:
 
     {{module_name}}
         Expands to the string representing the module name of target under
@@ -854,14 +861,12 @@ Separate linking and dependencies for shared libraries
       command = "..."
       outputs = [
         "{{output_dir}}/{{target_output_name}}{{output_extension}}",
-        "{{output_dir}}/{{target_output_name}}"
-            "{{output_extension}}.TOC",
+        "{{output_dir}}/{{target_output_name}}{{output_extension}}.TOC",
       ]
       link_output =
         "{{output_dir}}/{{target_output_name}}{{output_extension}}"
       depend_output =
-        "{{output_dir}}/{{target_output_name}}"
-            "{{output_extension}}.TOC"
+        "{{output_dir}}/{{target_output_name}}{{output_extension}}.TOC"
       restat = true
     }
 

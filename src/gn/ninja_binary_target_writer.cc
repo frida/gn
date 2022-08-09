@@ -156,17 +156,25 @@ void NinjaBinaryTargetWriter::ClassifyDependency(
   // don't link at all.
   bool can_link_libs = target_->IsFinal();
 
-  if (can_link_libs && dep->swift_values().builds_module())
+  if (can_link_libs && dep->builds_swift_module())
     classified_deps->swiftmodule_deps.push_back(dep);
 
-  if (dep->output_type() == Target::SOURCE_SET ||
-      // If a complete static library depends on an incomplete static library,
-      // manually link in the object files of the dependent library as if it
-      // were a source set. This avoids problems with braindead tools such as
-      // ar which don't properly link dependent static libraries.
-      (target_->complete_static_lib() &&
-       (dep->output_type() == Target::STATIC_LIBRARY &&
-        !dep->complete_static_lib()))) {
+  if (target_->source_types_used().RustSourceUsed() &&
+      (target_->output_type() == Target::RUST_LIBRARY ||
+       target_->output_type() == Target::STATIC_LIBRARY) &&
+      dep->IsLinkable()) {
+    // Rust libraries and static libraries aren't final, but need to have the
+    // link lines of all transitive deps specified.
+    classified_deps->linkable_deps.push_back(dep);
+  } else if (dep->output_type() == Target::SOURCE_SET ||
+             // If a complete static library depends on an incomplete static
+             // library, manually link in the object files of the dependent
+             // library as if it were a source set. This avoids problems with
+             // braindead tools such as ar which don't properly link dependent
+             // static libraries.
+             (target_->complete_static_lib() &&
+              (dep->output_type() == Target::STATIC_LIBRARY &&
+               !dep->complete_static_lib()))) {
     // Source sets have their object files linked into final targets
     // (shared libraries, executables, loadable modules, and complete static
     // libraries). Intermediate static libraries and other source sets
@@ -182,11 +190,6 @@ void NinjaBinaryTargetWriter::ClassifyDependency(
     // can be complete. Otherwise, these will be skipped since this target
     // will depend only on the source set's object files.
     classified_deps->non_linkable_deps.push_back(dep);
-  } else if (target_->output_type() == Target::RUST_LIBRARY &&
-             dep->IsLinkable()) {
-    // Rust libraries aren't final, but need to have the link lines of all
-    // transitive deps specified.
-    classified_deps->linkable_deps.push_back(dep);
   } else if (target_->complete_static_lib() && dep->IsFinal()) {
     classified_deps->non_linkable_deps.push_back(dep);
   } else if (can_link_libs && dep->IsLinkable()) {
@@ -225,7 +228,7 @@ void NinjaBinaryTargetWriter::AddSourceSetFiles(
     for (const OutputFile& output : outputs) {
       SourceFile output_as_source =
           output.AsSourceFile(source_set->settings()->build_settings());
-      if (output_as_source.type() == SourceFile::SOURCE_O) {
+      if (output_as_source.IsObjectType()) {
         obj_files->push_back(output);
       }
     }
@@ -272,7 +275,8 @@ void NinjaBinaryTargetWriter::WriteCompilerBuildLine(
     const std::vector<OutputFile>& extra_deps,
     const std::vector<OutputFile>& order_only_deps,
     const char* tool_name,
-    const std::vector<OutputFile>& outputs) {
+    const std::vector<OutputFile>& outputs,
+    bool can_write_source_info) {
   out_ << "build";
   path_output_.WriteFiles(out_, outputs);
 
@@ -289,21 +293,36 @@ void NinjaBinaryTargetWriter::WriteCompilerBuildLine(
     path_output_.WriteFiles(out_, order_only_deps);
   }
   out_ << std::endl;
+
+  if (!sources.empty() && can_write_source_info) {
+    out_ << "  "
+         << "source_file_part = " << sources[0].GetName();
+    out_ << std::endl;
+    out_ << "  "
+         << "source_name_part = "
+         << FindFilenameNoExtension(&sources[0].value());
+    out_ << std::endl;
+  }
 }
 
-void NinjaBinaryTargetWriter::WriteLinkerFlags(
+void NinjaBinaryTargetWriter::WriteCustomLinkerFlags(
     std::ostream& out,
-    const Tool* tool,
-    const SourceFile* optional_def_file) {
-  if (tool->AsC()) {
-    // First the ldflags from the target and its config.
-    RecursiveTargetConfigStringsToStream(target_, &ConfigValues::ldflags,
-                                       GetFlagOptions(), out);
-  }
+    const Tool* tool) {
 
-  // Followed by library search paths that have been recursively pushed
+  if (tool->AsC() || (tool->AsRust() && tool->AsRust()->MayLink())) {
+    // First the ldflags from the target and its config.
+    RecursiveTargetConfigStringsToStream(kRecursiveWriterKeepDuplicates,
+                                         target_, &ConfigValues::ldflags,
+                                         GetFlagOptions(), out);
+  }
+}
+
+void NinjaBinaryTargetWriter::WriteLibrarySearchPath(
+    std::ostream& out,
+    const Tool* tool) {
+  // Write library search paths that have been recursively pushed
   // through the dependency tree.
-  const OrderedSet<SourceDir> all_lib_dirs = target_->all_lib_dirs();
+  const UniqueVector<SourceDir>& all_lib_dirs = target_->all_lib_dirs();
   if (!all_lib_dirs.empty()) {
     // Since we're passing these on the command line to the linker and not
     // to Ninja, we need to do shell escaping.
@@ -330,6 +349,16 @@ void NinjaBinaryTargetWriter::WriteLinkerFlags(
                                      PathOutput::DIR_NO_LAST_SLASH);
     }
   }
+}
+
+void NinjaBinaryTargetWriter::WriteLinkerFlags(
+    std::ostream& out,
+    const Tool* tool,
+    const SourceFile* optional_def_file) {
+  // First any ldflags
+  WriteCustomLinkerFlags(out, tool);
+  // Then the library search path
+  WriteLibrarySearchPath(out, tool);
 
   if (optional_def_file) {
     out_ << " /DEF:";
@@ -339,15 +368,20 @@ void NinjaBinaryTargetWriter::WriteLinkerFlags(
 
 void NinjaBinaryTargetWriter::WriteLibs(std::ostream& out, const Tool* tool) {
   // Libraries that have been recursively pushed through the dependency tree.
+  // Since we're passing these on the command line to the linker and not
+  // to Ninja, we need to do shell escaping.
+  PathOutput lib_path_output(
+      path_output_.current_dir(), settings_->build_settings()->root_path_utf8(),
+      ESCAPE_NINJA_COMMAND);
   EscapeOptions lib_escape_opts;
   lib_escape_opts.mode = ESCAPE_NINJA_COMMAND;
-  const OrderedSet<LibFile> all_libs = target_->all_libs();
+  const UniqueVector<LibFile>& all_libs = target_->all_libs();
   for (size_t i = 0; i < all_libs.size(); i++) {
     const LibFile& lib_file = all_libs[i];
     const std::string& lib_value = lib_file.value();
     if (lib_file.is_source_file()) {
       out << " " << tool->linker_arg();
-      path_output_.WriteFile(out, lib_file.source_file());
+      lib_path_output.WriteFile(out, lib_file.source_file());
     } else {
       out << " " << tool->lib_switch();
       EscapeStringToStream(out, lib_value, lib_escape_opts);

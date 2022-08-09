@@ -180,7 +180,7 @@ struct SaturateFastOp<
 // saturated_cast<> is analogous to static_cast<> for numeric types, except
 // that the specified numeric conversion will saturate by default rather than
 // overflow or underflow, and NaN assignment to an integral will return 0.
-// All boundary condition behaviors can be overriden with a custom handler.
+// All boundary condition behaviors can be overridden with a custom handler.
 template <typename Dst,
           template <typename> class SaturationHandler = SaturationDefaultLimits,
           typename Src>
@@ -310,14 +310,14 @@ std::ostream& operator<<(std::ostream& os, const StrictNumeric<T>& value) {
                        typename UnderlyingType<R>::type>(lhs, rhs);     \
   }
 
-BASE_NUMERIC_COMPARISON_OPERATORS(Strict, IsLess, <);
-BASE_NUMERIC_COMPARISON_OPERATORS(Strict, IsLessOrEqual, <=);
-BASE_NUMERIC_COMPARISON_OPERATORS(Strict, IsGreater, >);
-BASE_NUMERIC_COMPARISON_OPERATORS(Strict, IsGreaterOrEqual, >=);
-BASE_NUMERIC_COMPARISON_OPERATORS(Strict, IsEqual, ==);
-BASE_NUMERIC_COMPARISON_OPERATORS(Strict, IsNotEqual, !=);
+BASE_NUMERIC_COMPARISON_OPERATORS(Strict, IsLess, <)
+BASE_NUMERIC_COMPARISON_OPERATORS(Strict, IsLessOrEqual, <=)
+BASE_NUMERIC_COMPARISON_OPERATORS(Strict, IsGreater, >)
+BASE_NUMERIC_COMPARISON_OPERATORS(Strict, IsGreaterOrEqual, >=)
+BASE_NUMERIC_COMPARISON_OPERATORS(Strict, IsEqual, ==)
+BASE_NUMERIC_COMPARISON_OPERATORS(Strict, IsNotEqual, !=)
 
-};  // namespace internal
+}  // namespace internal
 
 using internal::as_signed;
 using internal::as_unsigned;

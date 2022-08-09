@@ -8,13 +8,15 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
-#include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "gn/err.h"
+#include "gn/location.h"
 #include "gn/pattern.h"
 #include "gn/source_dir.h"
 #include "gn/source_file.h"
@@ -28,7 +30,7 @@ class Template;
 // Scope for the script execution.
 //
 // Scopes are nested. Writing goes into the toplevel scope, reading checks
-// values resursively down the stack until a match is found or there are no
+// values recursively down the stack until a match is found or there are no
 // more containing scopes.
 //
 // A containing scope can be const or non-const. The const containing scope is
@@ -58,8 +60,7 @@ class Scope {
 
     // Returns a non-null value if the given value can be programmatically
     // generated, or NULL if there is none.
-    virtual const Value* GetProgrammaticValue(
-        const std::string_view& ident) = 0;
+    virtual const Value* GetProgrammaticValue(std::string_view ident) = 0;
 
    protected:
     Scope* scope_;
@@ -93,6 +94,21 @@ class Scope {
 
     // When set, those variables are not merged.
     std::set<std::string> excluded_values;
+  };
+
+  // Details about a Scope's creation as a template invocation
+  struct TemplateInvocationEntry {
+    // Produce a printable string that describes the template invocation:
+    //
+    // 'template_name("target_name")  //some/BUILD.gn:<line>'
+    //
+    // The target name is only the string that's passed to the template as the
+    // name, it's not a complete GN label.
+    std::string Describe() const;
+
+    std::string template_name;
+    std::string target_name;
+    Location location;
   };
 
   // Creates an empty toplevel scope.
@@ -135,11 +151,11 @@ class Scope {
   // found_in_scope is set to the scope that contains the definition of the
   // ident. If the value was provided programmatically (like host_cpu),
   // found_in_scope will be set to null.
-  const Value* GetValue(const std::string_view& ident, bool counts_as_used);
-  const Value* GetValue(const std::string_view& ident) const;
-  const Value* GetValueWithScope(const std::string_view& ident,
+  const Value* GetValue(std::string_view ident, bool counts_as_used);
+  const Value* GetValue(std::string_view ident) const;
+  const Value* GetValueWithScope(std::string_view ident,
                                  const Scope** found_in_scope) const;
-  const Value* GetValueWithScope(const std::string_view& ident,
+  const Value* GetValueWithScope(std::string_view ident,
                                  bool counts_as_used,
                                  const Scope** found_in_scope);
 
@@ -165,7 +181,7 @@ class Scope {
   //    }
   // The 6 should get set on the nested scope rather than modify the value
   // in the outer one.
-  Value* GetMutableValue(const std::string_view& ident,
+  Value* GetMutableValue(std::string_view ident,
                          SearchNested search_mode,
                          bool counts_as_used);
 
@@ -174,19 +190,17 @@ class Scope {
   // different underlying buffer. This is useful because this std::string_view
   // is static and won't be deleted for the life of the program, so it can be
   // used as keys in places that may outlive a temporary. It will return an
-  // empty string for programmatic and nonexistant values.
-  std::string_view GetStorageKey(const std::string_view& ident) const;
+  // empty string for programmatic and nonexistent values.
+  std::string_view GetStorageKey(std::string_view ident) const;
 
   // The set_node indicates the statement that caused the set, for displaying
   // errors later. Returns a pointer to the value in the current scope (a copy
   // is made for storage).
-  Value* SetValue(const std::string_view& ident,
-                  Value v,
-                  const ParseNode* set_node);
+  Value* SetValue(std::string_view ident, Value v, const ParseNode* set_node);
 
   // Removes the value with the given identifier if it exists on the current
   // scope. This does not search recursive scopes. Does nothing if not found.
-  void RemoveIdentifier(const std::string_view& ident);
+  void RemoveIdentifier(std::string_view ident);
 
   // Removes from this scope all identifiers and templates that are considered
   // private.
@@ -200,17 +214,17 @@ class Scope {
   const Template* GetTemplate(const std::string& name) const;
 
   // Marks the given identifier as (un)used in the current scope.
-  void MarkUsed(const std::string_view& ident);
+  void MarkUsed(std::string_view ident);
   void MarkAllUsed();
   void MarkAllUsed(const std::set<std::string>& excluded_values);
-  void MarkUnused(const std::string_view& ident);
+  void MarkUnused(std::string_view ident);
 
   // Checks to see if the scope has a var set that hasn't been used. This is
   // called before replacing the var with a different one. It does not check
   // containing scopes.
   //
   // If the identifier is present but hasnn't been used, return true.
-  bool IsSetButUnused(const std::string_view& ident) const;
+  bool IsSetButUnused(std::string_view ident) const;
 
   // Checks the scope to see if any values were set but not used, and fills in
   // the error and returns false if they were.
@@ -280,7 +294,7 @@ class Scope {
   void set_source_dir(const SourceDir& d) { source_dir_ = d; }
 
   // Set of files that may affect the execution of this scope. Note that this
-  // set is constructed conservatively, meanining that every file that can
+  // set is constructed conservatively, meaning that every file that can
   // potentially affect this scope is included, but not necessarily every change
   // to these files will affect this scope.
   const SourceFileSet& build_dependency_files() const {
@@ -322,6 +336,15 @@ class Scope {
   void SetProperty(const void* key, void* value);
   void* GetProperty(const void* key, const Scope** found_on_scope) const;
 
+  // Track template invocations for printing or debugging.
+  void SetTemplateInvocationEntry(std::string template_name,
+                                  std::string target_name,
+                                  Location location);
+
+  // Return a vector containing the current stack of template invocations that
+  // lead up to this scope.
+  std::vector<TemplateInvocationEntry> GetTemplateInvocationEntries() const;
+
  private:
   friend class ProgrammaticProvider;
 
@@ -342,6 +365,13 @@ class Scope {
   // of the values may be different).
   static bool RecordMapValuesEqual(const RecordMap& a, const RecordMap& b);
 
+  // Walk up the containing scopes and any "invoker" Value scopes to gather any
+  // previous template invocations.
+  void AppendTemplateInvocationEntries(std::vector<TemplateInvocationEntry>* out) const;
+
+  // Walk up the containing scopes to find a TemplateInvocationEntry.
+  const TemplateInvocationEntry* FindTemplateInvocationEntry() const;
+
   // Scopes can have no containing scope (both null), a mutable containing
   // scope, or a const containing scope. The reason is that when we're doing
   // a new target, we want to refer to the base_config scope which will be read
@@ -358,6 +388,9 @@ class Scope {
   unsigned mode_flags_;
 
   RecordMap values_;
+
+  // If this is a template scope, track the template invocation.
+  std::unique_ptr<TemplateInvocationEntry> template_invocation_entry_;
 
   // Note that this can't use string pieces since the names are constructed from
   // Values which might be deallocated before this goes out of scope.
@@ -381,7 +414,8 @@ class Scope {
 
   SourceFileSet build_dependency_files_;
 
-  DISALLOW_COPY_AND_ASSIGN(Scope);
+  Scope(const Scope&) = delete;
+  Scope& operator=(const Scope&) = delete;
 };
 
 #endif  // TOOLS_GN_SCOPE_H_

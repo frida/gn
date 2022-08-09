@@ -24,6 +24,7 @@ std::string OperatingSystemArchitecture() {
     return std::string();
   }
   std::string arch(info.machine);
+  std::string os(info.sysname);
   if (arch == "i386" || arch == "i486" || arch == "i586" || arch == "i686") {
     arch = "x86";
   } else if (arch == "i86pc") {
@@ -33,8 +34,10 @@ std::string OperatingSystemArchitecture() {
     arch = "x86_64";
   } else if (arch == "amd64") {
     arch = "x86_64";
-  } else if (std::string(info.sysname) == "AIX") {
+  } else if (os == "AIX" || os == "OS400") {
     arch = "ppc64";
+  } else if (std::string(info.sysname) == "OS/390") {
+    arch = "s390x";
   }
   return arch;
 #elif defined(OS_WIN)
@@ -55,7 +58,10 @@ std::string OperatingSystemArchitecture() {
 }
 
 int NumberOfProcessors() {
-#if defined(OS_POSIX)
+#if defined(OS_ZOS)
+  return __get_num_online_cpus();
+
+#elif defined(OS_POSIX)
   // sysconf returns the number of "logical" (not "physical") processors on both
   // Mac and Linux.  So we get the number of max available "logical" processors.
   //

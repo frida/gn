@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/files/file_path.h"
 
 class Builder;
 class BuildSettings;
@@ -43,6 +43,30 @@ class XcodeWriter {
     // (in the same way that the other filtering is done, source and header
     // files for those target will still be listed in the generated project).
     std::string dir_filters_string;
+
+    // If specified, should be a semicolon-separated list of configuration
+    // names. It will be used to generate all the configuration variations
+    // in the project. If empty, the project is assumed to only use a single
+    // configuration "Release".
+    std::string configurations;
+
+    // If specified, should be the path for the configuration's build
+    // directory. It can use Xcode variables such as ${CONFIGURATION} or
+    // ${EFFECTIVE_PLATFORM_NAME}. If empty, it is assumed to be the same
+    // as the project directory.
+    base::FilePath configuration_build_dir;
+
+    // If specified, should be a semicolon-separated list of file patterns.
+    // It will be used to add files to the project that are not referenced
+    // from the BUILD.gn files. This is usually used to add documentation
+    // files.
+    base::FilePath::StringType additional_files_patterns;
+
+    // If specified, should be a semicolon-separated list of file roots.
+    // It will be used to add files to the project that are not referenced
+    // from the BUILD.gn files. This is usually used to add documentation
+    // files.
+    base::FilePath::StringType additional_files_roots;
 
     // Control which version of the build system should be used for the
     // generated Xcode project.
@@ -77,7 +101,8 @@ class XcodeWriter {
                                Err* err);
 
  private:
-  DISALLOW_COPY_AND_ASSIGN(XcodeWriter);
+  XcodeWriter(const XcodeWriter&) = delete;
+  XcodeWriter& operator=(const XcodeWriter&) = delete;
 };
 
 #endif  // TOOLS_GN_XCODE_WRITER_H_

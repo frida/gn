@@ -14,7 +14,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
-#include <sys/param.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -30,7 +29,6 @@
 #include "base/files/file_path.h"
 #include "base/files/scoped_file.h"
 #include "base/logging.h"
-#include "base/macros.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/stl_util.h"
 #include "base/strings/string_split.h"
@@ -47,6 +45,10 @@
 #include <grp.h>
 #endif
 
+#if !defined(OS_ZOS)
+#include <sys/param.h>
+#endif
+
 // We need to do this on AIX due to some inconsistencies in how AIX
 // handles XOPEN_SOURCE and ALL_SOURCE.
 #if defined(OS_AIX)
@@ -58,7 +60,8 @@ namespace base {
 namespace {
 
 #if defined(OS_BSD) || defined(OS_MACOSX) || defined(OS_NACL) || \
-    defined(OS_HAIKU) || defined(OS_MSYS) || defined(OS_ANDROID) && __ANDROID_API__ < 21
+    defined(OS_HAIKU) || defined(OS_MSYS) || defined(OS_ZOS) ||  \
+    defined(OS_ANDROID) && __ANDROID_API__ < 21
 int CallStat(const char* path, stat_wrapper_t* sb) {
   return stat(path, sb);
 }
@@ -143,6 +146,7 @@ bool CopyFileContents(File* infile, File* outfile) {
 // Appends |mode_char| to |mode| before the optional character set encoding; see
 // https://www.gnu.org/software/libc/manual/html_node/Opening-Streams.html for
 // details.
+#if !defined(OS_ZOS)
 std::string AppendModeCharacter(std::string_view mode, char mode_char) {
   std::string result(mode);
   size_t comma_pos = result.find(',');
@@ -150,8 +154,9 @@ std::string AppendModeCharacter(std::string_view mode, char mode_char) {
                 mode_char);
   return result;
 }
-#endif
+#endif  // !OS_ZOS
 
+#endif  // !OS_MACOSX
 }  // namespace
 
 FilePath MakeAbsoluteFilePath(const FilePath& input) {
@@ -210,6 +215,9 @@ bool ReplaceFile(const FilePath& from_path,
 }
 
 bool CreateLocalNonBlockingPipe(int fds[2]) {
+#if defined(OS_LINUX) || defined(OS_BSD)
+  return pipe2(fds, O_CLOEXEC | O_NONBLOCK) == 0;
+#else
   int raw_fds[2];
   if (pipe(raw_fds) != 0)
     return false;
@@ -226,6 +234,7 @@ bool CreateLocalNonBlockingPipe(int fds[2]) {
   fds[0] = fd_out.release();
   fds[1] = fd_in.release();
   return true;
+#endif
 }
 
 bool SetNonBlocking(int fd) {
@@ -263,6 +272,16 @@ bool DirectoryExists(const FilePath& path) {
   if (CallStat(path.value().c_str(), &file_info) != 0)
     return false;
   return S_ISDIR(file_info.st_mode);
+}
+
+ScopedFD CreateAndOpenFdForTemporaryFileInDir(const FilePath& directory,
+                                              FilePath* path) {
+  *path = directory.Append(TempFileName());
+  const std::string& tmpdir_string = path->value();
+  // this should be OK since mkstemp just replaces characters in place
+  char* buffer = const_cast<char*>(tmpdir_string.c_str());
+
+  return ScopedFD(HANDLE_EINTR(mkstemp(buffer)));
 }
 
 #if !defined(OS_FUCHSIA)
@@ -367,6 +386,11 @@ FilePath GetHomeDir() {
 }
 #endif  // !defined(OS_MACOSX)
 
+File CreateAndOpenTemporaryFileInDir(const FilePath& dir, FilePath* temp_file) {
+  ScopedFD fd = CreateAndOpenFdForTemporaryFileInDir(dir, temp_file);
+  return fd.is_valid() ? File(std::move(fd)) : File(File::GetLastFileError());
+}
+
 static bool CreateTemporaryDirInDirImpl(const FilePath& base_dir,
                                         const FilePath::StringType& name_tmpl,
                                         FilePath* new_dir) {
@@ -378,11 +402,25 @@ static bool CreateTemporaryDirInDirImpl(const FilePath& base_dir,
 
   // this should be OK since mkdtemp just replaces characters in place
   char* buffer = const_cast<char*>(sub_dir_string.c_str());
+#if !defined(OS_ZOS)
   char* dtemp = mkdtemp(buffer);
   if (!dtemp) {
     DPLOG(ERROR) << "mkdtemp";
     return false;
   }
+#else
+  // TODO(gabylb) - zos: currently no mkdtemp on z/OS.
+  // Get a unique temp filename, which should also be unique as a directory name
+  char* dtemp = mktemp(buffer);
+  if (!dtemp) {
+    DPLOG(ERROR) << "mktemp";
+    return false;
+  }
+  if (mkdir(dtemp, S_IRWXU)) {
+    DPLOG(ERROR) << "mkdir";
+    return false;
+  }
+#endif
   *new_dir = FilePath(dtemp);
   return true;
 }
@@ -421,7 +459,7 @@ bool CreateDirectoryAndGetError(const FilePath& full_path, File::Error* error) {
        i != subpaths.rend(); ++i) {
     if (DirectoryExists(*i))
       continue;
-    if (mkdir(i->value().c_str(), 0700) == 0)
+    if (mkdir(i->value().c_str(), 0777) == 0)
       continue;
     // Mkdir failed, but it might have failed with EEXIST, or some other error
     // due to the the directory appearing out of thin air. This can occur if
@@ -442,7 +480,7 @@ bool NormalizeFilePath(const FilePath& path, FilePath* normalized_path) {
   if (real_path_result.empty())
     return false;
 
-  // To be consistant with windows, fail if |real_path_result| is a
+  // To be consistent with windows, fail if |real_path_result| is a
   // directory.
   if (DirectoryExists(real_path_result))
     return false;
@@ -478,7 +516,7 @@ FILE* OpenFile(const FilePath& filename, const char* mode) {
       strchr(mode, 'e') == nullptr ||
       (strchr(mode, ',') != nullptr && strchr(mode, 'e') > strchr(mode, ',')));
   FILE* result = nullptr;
-#if defined(OS_MACOSX)
+#if defined(OS_MACOSX) || defined(OS_ZOS)
   // macOS does not provide a mode character to set O_CLOEXEC; see
   // https://developer.apple.com/legacy/library/documentation/Darwin/Reference/ManPages/man3/fopen.3.html.
   const char* the_mode = mode;
@@ -489,7 +527,7 @@ FILE* OpenFile(const FilePath& filename, const char* mode) {
   do {
     result = fopen(filename.value().c_str(), the_mode);
   } while (!result && errno == EINTR);
-#if defined(OS_MACOSX)
+#if defined(OS_MACOSX) || defined(OS_ZOS)
   // Mark the descriptor as close-on-exec.
   if (result)
     SetCloseOnExec(fileno(result));

@@ -126,12 +126,14 @@ Variables
       help --root-target").
 
   script_executable [optional]
-      Path to specific Python executable or other interpreter to use in
-      action targets and exec_script calls. By default GN searches the
-      PATH for Python to execute these scripts.
+      By default, GN runs the scripts used in action targets and exec_script
+      calls using the Python interpreter found in PATH. This value specifies the
+      Python executable or other interpreter to use instead.
 
-      If set to the empty string, the path specified in action targets
-      and exec_script calls will be executed directly.
+      If set to the empty string, the scripts will be executed directly.
+
+      The command-line switch --script-executable will override this value (see
+      "gn help --script-executable")
 
   secondary_source [optional]
       Label of an alternate directory tree to find input files. When searching
@@ -148,7 +150,7 @@ Variables
   default_args [optional]
       Scope containing the default overrides for declared arguments. These
       overrides take precedence over the default values specified in the
-      declare_args() block, but can be overriden using --args or the
+      declare_args() block, but can be overridden using --args or the
       args.gn file.
 
       This is intended to be used when subprojects declare arguments with
@@ -286,16 +288,22 @@ base::FilePath PythonBatToExe(const base::FilePath& bat_path) {
   return base::FilePath();
 }
 
+// python_exe_name and python_bat_name can be empty but cannot be absolute
+// paths. They should be "python.exe" or "", etc., and "python.bat" or "", etc.
 base::FilePath FindWindowsPython(const base::FilePath& python_exe_name,
                                  const base::FilePath& python_bat_name) {
   char16_t current_directory[MAX_PATH];
   ::GetCurrentDirectory(MAX_PATH, reinterpret_cast<LPWSTR>(current_directory));
 
   // First search for python.exe in the current directory.
-  base::FilePath cur_dir_candidate_exe =
-      base::FilePath(current_directory).Append(python_exe_name);
-  if (base::PathExists(cur_dir_candidate_exe))
-    return cur_dir_candidate_exe;
+  if (!python_exe_name.empty()) {
+    CHECK(python_exe_name.FinalExtension() == u".exe");
+    CHECK_EQ(python_exe_name.IsAbsolute(), false);
+    base::FilePath cur_dir_candidate_exe =
+        base::FilePath(current_directory).Append(python_exe_name);
+    if (base::PathExists(cur_dir_candidate_exe))
+      return cur_dir_candidate_exe;
+  }
 
   // Get the path.
   const char16_t kPathEnvVarName[] = u"Path";
@@ -313,18 +321,24 @@ base::FilePath FindWindowsPython(const base::FilePath& python_exe_name,
   for (const auto& component : base::SplitStringPiece(
            std::u16string_view(full_path.get(), path_length), u";",
            base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY)) {
-    base::FilePath candidate_exe =
-        base::FilePath(component).Append(python_exe_name);
-    if (base::PathExists(candidate_exe))
-      return candidate_exe;
+    if (!python_exe_name.empty()) {
+      base::FilePath candidate_exe =
+          base::FilePath(component).Append(python_exe_name);
+      if (base::PathExists(candidate_exe))
+        return candidate_exe;
+    }
 
     // Also allow python.bat, but convert into the .exe.
-    base::FilePath candidate_bat =
-        base::FilePath(component).Append(python_bat_name);
-    if (base::PathExists(candidate_bat)) {
-      base::FilePath python_exe = PythonBatToExe(candidate_bat);
-      if (!python_exe.empty())
-        return python_exe;
+    if (!python_bat_name.empty()) {
+      CHECK(python_bat_name.FinalExtension() == u".bat");
+      CHECK_EQ(python_bat_name.IsAbsolute(), false);
+      base::FilePath candidate_bat =
+          base::FilePath(component).Append(python_bat_name);
+      if (base::PathExists(candidate_bat)) {
+        base::FilePath python_exe = PythonBatToExe(candidate_bat);
+        if (!python_exe.empty())
+          return python_exe;
+      }
     }
   }
   return base::FilePath();
@@ -588,7 +602,7 @@ bool Setup::SaveArgsToFile() {
 
   std::string contents = args_input_file_->contents();
   commands::FormatStringToString(contents, commands::TreeDumpMode::kInactive,
-                                 &contents);
+                                 &contents, nullptr);
 #if defined(OS_WIN)
   // Use Windows lineendings for this file since it will often open in
   // Notepad which can't handle Unix ones.
@@ -721,6 +735,42 @@ bool Setup::FillBuildDir(const std::string& build_dir,
   return true;
 }
 
+// On Chromium repositories on Windows the Python executable can be specified as
+// python, python.bat, or python.exe (ditto for python3, and with or without a
+// full path specification). This handles all of these cases and returns a fully
+// specified path to a .exe file.
+// This is currently a NOP on other platforms.
+base::FilePath ProcessFileExtensions(base::FilePath script_executable) {
+#if defined(OS_WIN)
+  // If we have a relative path with no extension such as "python" or
+  // "python3" then do a path search on the name with .exe and .bat appended.
+  auto extension = script_executable.FinalExtension();
+  if (script_executable.IsAbsolute()) {
+    // Do translation from .bat to .exe but otherwise just pass through.
+    if (extension == u".bat")
+      script_executable = PythonBatToExe(script_executable);
+  } else {
+    if (extension == u"") {
+      // If no extension is specified then search the path for .exe and .bat
+      // variants.
+      script_executable =
+          FindWindowsPython(script_executable.ReplaceExtension(u".exe"),
+                            script_executable.ReplaceExtension(u".bat"));
+    } else if (extension == u".bat") {
+      // Search the path just for the specified .bat.
+      script_executable =
+          FindWindowsPython(base::FilePath(), script_executable);
+    } else if (extension == u".exe") {
+      // Search the path just for the specified .exe.
+      script_executable =
+          FindWindowsPython(script_executable, base::FilePath());
+    }
+  }
+  script_executable = script_executable.NormalizePathSeparatorsTo('/');
+#endif
+  return script_executable;
+}
+
 bool Setup::FillPythonPath(const base::CommandLine& cmdline, Err* err) {
   // Trace this since it tends to be a bit slow on Windows.
   ScopedTrace setup_trace(TraceItem::TRACE_SETUP, "Fill Python Path");
@@ -728,39 +778,35 @@ bool Setup::FillPythonPath(const base::CommandLine& cmdline, Err* err) {
   if (cmdline.HasSwitch(switches::kScriptExecutable)) {
     auto script_executable =
         cmdline.GetSwitchValuePath(switches::kScriptExecutable);
-#if defined(OS_WIN)
-    // If we have a relative path with no extension such as "python" or
-    // "python3" then do a path search on the name with .exe and .bat appended.
-    if (!script_executable.IsAbsolute() &&
-        script_executable.FinalExtension() == u"") {
-      script_executable =
-          FindWindowsPython(script_executable.ReplaceExtension(u".exe"),
-                            script_executable.ReplaceExtension(u".bat"));
-    } else {
-      if (script_executable.FinalExtension() == u".bat")
-        script_executable = PythonBatToExe(script_executable);
-    }
-#endif
-    build_settings_.set_python_path(script_executable);
+    build_settings_.set_python_path(ProcessFileExtensions(script_executable));
   } else if (value) {
     if (!value->VerifyTypeIs(Value::STRING, err)) {
       return false;
     }
-    build_settings_.set_python_path(
-        base::FilePath(UTF8ToFilePath(value->string_value())));
+    // Note that an empty string value is valid, and means that the scripts
+    // invoked by actions will be run directly.
+    base::FilePath python_path;
+    if (!value->string_value().empty()) {
+      python_path =
+          ProcessFileExtensions(UTF8ToFilePath(value->string_value()));
+      if (python_path.empty()) {
+        *err = Err(Location(), "Could not find \"" + value->string_value() +
+                                   "\" from dotfile in PATH.");
+        return false;
+      }
+    }
+    build_settings_.set_python_path(python_path);
   } else {
 #if defined(OS_WIN)
-    const base::FilePath python_exe_name(u"python.exe");
-    const base::FilePath python_bat_name(u"python.bat");
     base::FilePath python_path =
-        FindWindowsPython(python_exe_name, python_bat_name);
-    if (python_path.empty()) {
+        ProcessFileExtensions(base::FilePath(u"python"));
+    if (!python_path.IsAbsolute()) {
       scheduler_.Log("WARNING",
                      "Could not find python on path, using "
                      "just \"python.exe\"");
-      python_path = python_exe_name;
+      python_path = base::FilePath(u"python.exe");
     }
-    build_settings_.set_python_path(python_path.NormalizePathSeparatorsTo('/'));
+    build_settings_.set_python_path(python_path);
 #else
     build_settings_.set_python_path(base::FilePath("python"));
 #endif
@@ -989,6 +1035,17 @@ bool Setup::FillOtherConfig(const base::CommandLine& cmdline, Err* err) {
     }
     SourceFile path(arg_file_template_value->string_value());
     build_settings_.set_arg_file_template_path(path);
+  }
+
+  // No stamp files.
+  const Value* no_stamp_files_value =
+      dotfile_scope_.GetValue("no_stamp_files", true);
+  if (no_stamp_files_value) {
+    if (!no_stamp_files_value->VerifyTypeIs(Value::BOOLEAN, err)) {
+      return false;
+    }
+    build_settings_.set_no_stamp_files(no_stamp_files_value->boolean_value());
+    CHECK(!build_settings_.no_stamp_files()) << "no_stamp_files does not work yet!";
   }
 
   return true;

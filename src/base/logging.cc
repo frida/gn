@@ -10,7 +10,6 @@
 #include <iterator>
 #include <thread>
 
-#include "base/macros.h"
 #include "util/build_config.h"
 
 #if defined(OS_WIN)
@@ -28,13 +27,15 @@
 
 #if defined(OS_POSIX) || defined(OS_FUCHSIA)
 #include <errno.h>
-#include <paths.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#if !defined(OS_ZOS)
+#include <paths.h>
+#endif
 #endif
 
 #include <algorithm>
@@ -76,7 +77,7 @@ const int kAlwaysPrintErrorLevel = LOG_ERROR;
 
 }  // namespace
 
-#if DCHECK_IS_CONFIGURABLE
+#if defined(DCHECK_IS_CONFIGURABLE)
 // In DCHECK-enabled Chrome builds, allow the meaning of LOG_DCHECK to be
 // determined at run-time. We default it to INFO, to avoid it triggering
 // crashes before the run-time has explicitly chosen the behaviour.
@@ -177,7 +178,7 @@ LogMessage::~LogMessage() {
 #if defined(OS_WIN)
   OutputDebugStringA(str_newline.c_str());
 #endif
-  ignore_result(fwrite(str_newline.data(), str_newline.size(), 1, stderr));
+  fwrite(str_newline.data(), str_newline.size(), 1, stderr);
   fflush(stderr);
 
   if (severity_ == LOG_FATAL) {
